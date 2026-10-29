@@ -92,7 +92,7 @@ export default function ScoreBreakdownModal({ data, onClose }) {
                     Principal outstanding {rupees(loan.outstanding_principal)}
                     {loan.next_interest_due ? `. Next interest due ${formatDate(loan.next_interest_due)}` : ""}
                     {loan.interest_cycles_overdue > 0
-                      ? `. ${loan.interest_cycles_overdue} interest due date(s) passed unpaid`
+                      ? `. ${rupees(loan.interest_shortfall)} of interest unpaid since ${formatDate(loan.first_overdue_due)}`
                       : ""}
                   </small>
                 </div>

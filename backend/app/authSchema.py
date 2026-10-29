@@ -211,8 +211,9 @@ class CibilUpdate(BaseModel):
     score: int = Field(..., ge=300, le=900)
 
 class FundRequestCreate(BaseModel):
+    # Only the amount and the reason come from the browser. The salary, score, balances and limits
+    # are always read from the database on the server.
     amount: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
-    monthly_salary: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
     reason: str = Field(..., min_length=10, max_length=500)
 
 
@@ -304,6 +305,8 @@ class CreditScoreLoan(BaseModel):
     interest_cycles_due: int
     interest_cycles_overdue: int
     next_interest_due: datetime | None
+    first_overdue_due: datetime | None = None     # the first interest due date that passed unpaid
+    interest_shortfall: float = 0.0               # interest still missing on that loan
 
 
 class CreditScoreResponse(BaseModel):

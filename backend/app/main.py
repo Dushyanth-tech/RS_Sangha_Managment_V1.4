@@ -4,6 +4,7 @@ from fastapi.responses import Response
 # from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from app.credit_score import calculate_internal_score
+from app.emergency_eligibility import evaluate_emergency_eligibility
 from app.authSchema import CreditScoreResponse
 from app.authSchema import NewUser, LoginUser, NewSanghas, Search, AdminRequestCreate,AddAdminRequest,RemoveSanghasPayload,SanghaUpdate, ProfileWizardUpdate, NotificationCreate, ClearNotificationsRequest, SanghaSavingsAccountCreate, CibilUpdate, FundRequestCreate, FundRequestReview, FundRepaymentCreate, FundPaymentCreate, FundPaymentConfirm, FundPaymentReject, ContributionCreate
 from app.authSchema import (
@@ -3056,6 +3057,53 @@ def get_savings_history(
 # ---------------------------------------------------------------------
 # POST /sangha-savings/requests   (member only)
 # ---------------------------------------------------------------------
+def _evaluate_for_member(db: Session, user: User, requested_amount: Decimal | None = None, lock: bool = False):
+    """Everything the backend knows about this member's emergency-money eligibility."""
+    sangha = db.query(Sanghas).filter(Sanghas.id == user.sangha_id).first() if user.sangha_id else None
+    # Locking the account row serialises simultaneous submissions for this Sangha
+    account = _account_for(db, sangha.id, lock=lock) if sangha else None
+    if lock:
+        _lock_user(db, user.id)          # account first, then member - same order as the confirm flows
+    balance = _balance(account) if account else None
+
+    blockers = _blockers(db, user, sangha, account, balance)
+    debts = _member_debts(db, user.id)
+    evaluation = evaluate_emergency_eligibility(
+        db,
+        user,
+        fund_balance=balance,
+        base_blockers=blockers,
+        interest_rate_percent=INTEREST_RATE_PERCENT,
+        interest_due_now=sum((x["interest"] for x in debts), ZERO),
+        debt_principal=sum((x["outstanding"] for x in debts), ZERO),
+        requested_amount=requested_amount,
+    )
+    return evaluation, sangha
+
+
+def _stored_eligibility(req: FundRequest):
+    """The eligibility breakdown saved when the request was submitted (None for older requests)."""
+    if not req.eligibility_snapshot:
+        return None
+    try:
+        return json.loads(req.eligibility_snapshot)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.get("/sangha-savings/eligibility")
+def get_my_emergency_eligibility(
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """What the 'Request Emergency Money' modal shows. The member comes from the JWT only."""
+    user = _load_user(db, current_user_id)
+    if user.role != "member":
+        raise HTTPException(status_code=403, detail="Only members can request emergency money.")
+    evaluation, _ = _evaluate_for_member(db, user)
+    return evaluation
+
+
 @app.post("/sangha-savings/requests")
 def create_fund_request(
     payload: FundRequestCreate,
@@ -3066,34 +3114,43 @@ def create_fund_request(
     if user.role != "member":
         raise HTTPException(status_code=403, detail="Only members can request emergency money.")
 
-    sangha = db.query(Sanghas).filter(Sanghas.id == user.sangha_id).first() if user.sangha_id else None
-    # Locking the account row serialises simultaneous submissions for this Sangha
-    account = _account_for(db, sangha.id, lock=True) if sangha else None
-    balance = _balance(account) if account else None
+    # Independent server-side check from the latest database records. Nothing the browser says about
+    # scores, balances, salary or limits is used; only the amount and the reason are read from it.
+    evaluation, sangha = _evaluate_for_member(db, user, requested_amount=payload.amount, lock=True)
+    if not evaluation["canRequest"]:
+        blocking = next(r for r in evaluation["reasons"] if r["level"] == "block")
+        status = 422 if blocking["code"].startswith("amount_") else 409
+        raise HTTPException(status_code=status, detail=blocking["message"])     # no request row is created
 
-    blockers = _blockers(db, user, sangha, account, balance)
-    if blockers:
-        raise HTTPException(status_code=409, detail=blockers[0]["message"])
-
-    if payload.amount > balance:
-        raise HTTPException(status_code=422, detail="Requested amount exceeds the available Sangha Savings balance.")
+    snapshot = {
+        key: evaluation[key]
+        for key in ("decision", "summary", "maxEligibleAmount", "reasons", "score", "balance",
+                    "obligations", "fund", "salary", "evaluatedAt")
+    }
+    snapshot["requestedAmount"] = float(payload.amount)
 
     req = FundRequest(
         member_id=user.id,
         sangha_id=sangha.id,
         amount_requested=payload.amount,
-        monthly_salary=payload.monthly_salary,
+        monthly_salary=Decimal(str(evaluation["salary"]["monthly"])),      # from the database, not the browser
         reason=payload.reason.strip(),
         status=FundRequestStatus.pending,
+        eligibility_snapshot=json.dumps(snapshot),
     )
     db.add(req)
     db.flush()
 
     if sangha.admin_id:
+        sc = evaluation["score"]
+        note = f" RS-Sangha score {sc['value']}/{sc['max']}" + (f" ({sc['category']})." if sc["category"] else " (provisional).")
+        if evaluation["decision"] == "manual_review":
+            note += " Manual review is needed."
         _notify_user(
             db, user.id, sangha.admin_id,
             "New emergency money request",
-            f"{user.fullname} has requested ₹{payload.amount:,.2f} from {sangha.name}. Please review it in Sangha Savings.",
+            f"{user.fullname} has requested {payload.amount:,.2f} from {sangha.name}." + note
+            + " Please review it in Sangha Savings.",
             sangha.id,
         )
 
@@ -3111,6 +3168,9 @@ def create_fund_request(
             "amount": float(req.amount_requested),
             "status": req.status.value,
             "requestedAt": req.requested_at.isoformat(),
+            "eligibilityDecision": evaluation["decision"],
+            "score": evaluation["score"]["value"],
+            "maxEligibleAmount": evaluation["maxEligibleAmount"],
         },
     }
 
@@ -3271,6 +3331,8 @@ def get_fund_request_detail(
         ],
         # ---- Sangha contributions ----
         "contributions": _member_contribution_summary(db, req.member_id),
+        # ---- RS-Sangha score + eligibility exactly as the server saw it at submission ----
+        "eligibility": _stored_eligibility(req),
     }
 
 # ---------------------------------------------------------------------

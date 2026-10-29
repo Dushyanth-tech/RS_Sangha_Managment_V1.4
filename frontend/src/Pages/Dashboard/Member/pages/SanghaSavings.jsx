@@ -879,107 +879,50 @@ function RequestModal({ ov, onClose, onSubmitted }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
-  const [snapshots, setSnapshots] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState("");
+
+  // Eligibility is calculated by the backend from the member's own records.
+  const [elig, setElig] = useState(null);
+  const [eligLoading, setEligLoading] = useState(true);
+  const [eligError, setEligError] = useState("");
 
   const lock = useRef(false);
 
   const amount = Number(form.amount);
 
-  // Load the member's existing history. No snapshot is created here.
-  useEffect(() => {
-    let active = true;
+  const loadEligibility = useCallback(async () => {
+    setEligLoading(true);
+    setEligError("");
 
-    async function loadHistory() {
-      setHistoryLoading(true);
-      setHistoryError("");
-
-      try {
-        const response = await api.get("/me/bank-balance/history", {
-          params: { days: 28 },
-        });
-
-        if (!Array.isArray(response.data)) {
-          throw new Error("Unexpected balance history response.");
-        }
-
-        if (active) {
-          setSnapshots(
-            response.data.filter((item) => {
-              const balance = Number(item.balance);
-              return (
-                Number.isFinite(balance) &&
-                balance >= 0 &&
-                item.recorded_at &&
-                !Number.isNaN(Date.parse(item.recorded_at))
-              );
-            })
-          );
-        }
-      } catch (err) {
-        if (active) {
-          setHistoryError(
-            err.response?.data?.detail ||
-              "Unable to load your available-balance history."
-          );
-        }
-      } finally {
-        if (active) setHistoryLoading(false);
-      }
+    try {
+      // No member id and no figures are sent: the JWT identifies the member.
+      const response = await api.get("/sangha-savings/eligibility");
+      setElig(response.data);
+    } catch (err) {
+      setElig(null);
+      setEligError(
+        err.response?.data?.detail ||
+          "Unable to check your eligibility right now."
+      );
+    } finally {
+      setEligLoading(false);
     }
-
-    loadHistory();
-
-    return () => {
-      active = false;
-    };
   }, []);
 
-  const assessment = useMemo(() => {
-    const sorted = [...snapshots].sort(
-      (a, b) =>
-        new Date(a.recorded_at).getTime() -
-        new Date(b.recorded_at).getTime()
-    );
+  useEffect(() => {
+    loadEligibility();
+  }, [loadEligibility]);
 
-    const values = sorted.map((item) => Number(item.balance));
+  const maxAmount = Number(elig?.maxEligibleAmount ?? 0);
 
-    if (!values.length) {
-      return {
-        count: 0,
-        average: null,
-        minimum: null,
-        maximum: null,
-        trend: "Not enough history",
-        change: null,
-      };
-    }
-
-    const first = values[0];
-    const latest = values[values.length - 1];
-    const difference = latest - first;
-
-    let trend = "Not enough history";
-
-    if (values.length >= 2) {
-      const tolerance = 0.01;
-
-      if (difference > tolerance) trend = "Increasing";
-      else if (difference < -tolerance) trend = "Decreasing";
-      else trend = "Stable";
-    }
-
-    return {
-      count: values.length,
-      average:
-        values.reduce((sum, value) => sum + value, 0) / values.length,
-      minimum: Math.min(...values),
-      maximum: Math.max(...values),
-      trend,
-      change: values.length >= 2 ? difference : null,
-    };
-  }, [snapshots]);
+  const decision = elig?.decision;
+  const decisionTone =
+    decision === "eligible" ? "green" : decision === "manual_review" ? "amber" : "red";
+  const decisionLabel =
+    decision === "eligible"
+      ? "Eligible"
+      : decision === "manual_review"
+      ? "Manual review"
+      : "Not eligible";
 
   const update = (event) => {
     const { name, value } = event.target;
@@ -992,6 +935,7 @@ function RequestModal({ ov, onClose, onSubmitted }) {
     setError("");
   };
 
+  // These checks only save the member a round trip. The backend repeats all of them.
   const validate = () => {
     if (
       !member?.profile?.fullname ||
@@ -1001,19 +945,27 @@ function RequestModal({ ov, onClose, onSubmitted }) {
       return "Your name, phone number and address must be in your profile.";
     }
 
-    if (ov.eligibility && !ov.eligibility.canRequest) {
+    if (eligLoading) {
+      return "Checking your eligibility. Please wait a moment.";
+    }
+
+    if (!elig) {
+      return eligError || "Unable to check your eligibility right now.";
+    }
+
+    if (!elig.canRequest) {
       return (
-        ov.eligibility.reasons?.[0]?.message ||
+        elig.reasons?.find((r) => r.level === "block")?.message ||
         "You are currently not eligible to request emergency money."
       );
     }
 
     if (!Number.isFinite(amount) || amount <= 0) {
-      return "Enter a requested amount greater than ₹0.";
+      return "Enter a requested amount greater than 0.";
     }
 
-    if (amount > Number(fund?.balance ?? 0)) {
-      return "Requested amount exceeds the available Sangha fund.";
+    if (amount > maxAmount) {
+      return `The most you can request right now is ${rupees(maxAmount)}.`;
     }
 
     if (form.reason.trim().length < 10) {
@@ -1051,8 +1003,8 @@ function RequestModal({ ov, onClose, onSubmitted }) {
     setError("");
 
     try {
-      // The backend rechecks member eligibility and the current
-      // Sangha fund balance before saving the request.
+      // Only the amount and the reason are sent. The backend recalculates the score, balance
+      // limit, salary, loans and Sangha funds itself before it creates the request.
       const response = await api.post("/sangha-savings/requests", {
         amount,
         reason: form.reason.trim(),
@@ -1067,23 +1019,16 @@ function RequestModal({ ov, onClose, onSubmitted }) {
           err.message ||
           "Unable to submit the request."
       );
+      setStep("form");
+      loadEligibility();
       lock.current = false;
     } finally {
       setSubmitting(false);
     }
   };
 
-  const formatTrend = () => {
-    if (assessment.change === null) {
-      return assessment.trend;
-    }
-
-    const sign = assessment.change > 0 ? "+" : "";
-
-    return `${assessment.trend} (${sign}${rupees(
-      assessment.change
-    )})`;
-  };
+  const reasonsToShow = (elig?.reasons ?? []).filter((r) => r.level !== "info");
+  const basis = (elig?.reasons ?? []).find((r) => r.code === "limit_basis");
 
   return (
     <Modal
@@ -1108,6 +1053,113 @@ function RequestModal({ ov, onClose, onSubmitted }) {
             <input value={member?.profile?.address || ""} readOnly />
           </label>
 
+          <div className="ss-assessment ss-wide">
+            <div className="ss-assessment__heading">
+              <div>
+                <h4>Emergency Fund Eligibility</h4>
+                <p>Calculated by the server from your Sangha records</p>
+              </div>
+
+              {eligLoading ? (
+                <span className="ss-assessment__badge">Checking</span>
+              ) : elig ? (
+                <Badge tone={decisionTone}>{decisionLabel}</Badge>
+              ) : null}
+            </div>
+
+            {eligLoading ? (
+              <p className="ss-assessment__message">
+                Checking your RS-Sangha score, balance history and Sangha funds...
+              </p>
+            ) : eligError ? (
+              <ErrorBox text={eligError} onRetry={loadEligibility} />
+            ) : elig ? (
+              <>
+                <p className="ss-assessment__message">{elig.summary}</p>
+
+                <div className="ss-assessment__grid">
+                  <div className="ss-assessment__item">
+                    <span>RS-Sangha Score (minimum {elig.score.minimumRequired})</span>
+                    <strong>
+                      {elig.score.value != null
+                        ? `${elig.score.value} / ${elig.score.max}`
+                        : "Not available yet"}
+                    </strong>
+                    {elig.score.value != null && (
+                      <span>
+                        {elig.score.status === "sufficient"
+                          ? elig.score.category
+                          : "Provisional score"}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>
+                      Weighted average balance
+                      {elig.balance.daysCounted > 0
+                        ? ` (${elig.balance.daysCounted} day${elig.balance.daysCounted === 1 ? "" : "s"})`
+                        : ""}
+                    </span>
+                    <strong>
+                      {elig.balance.weightedAverage != null
+                        ? rupees(elig.balance.weightedAverage)
+                        : "No history yet"}
+                    </strong>
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>Balance limit (average x {elig.balance.multiplier})</span>
+                    <strong>
+                      {elig.balance.balanceLimit != null
+                        ? rupees(elig.balance.balanceLimit)
+                        : "Not available"}
+                    </strong>
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>Outstanding loan principal</span>
+                    <strong>{rupees(elig.obligations.outstandingPrincipal)}</strong>
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>Sangha fund available</span>
+                    <strong>{rupees(elig.fund.available ?? 0)}</strong>
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>Monthly salary (on file)</span>
+                    <strong>
+                      {elig.salary.monthly != null ? rupees(elig.salary.monthly) : "Not on file"}
+                    </strong>
+                  </div>
+
+                  <div className="ss-assessment__item">
+                    <span>Maximum eligible amount</span>
+                    <strong>{rupees(elig.maxEligibleAmount)}</strong>
+                  </div>
+                </div>
+
+                {reasonsToShow.length > 0 && (
+                  <ul className="ss-reasons">
+                    {reasonsToShow.map((r) => (
+                      <li key={r.code}>
+                        <span>{r.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {basis && <p className="ss-assessment__disclaimer">{basis.message}</p>}
+              </>
+            ) : null}
+
+            <p className="ss-assessment__disclaimer">
+              This is an internal RS-Sangha score, not an official CIBIL score. Your request is
+              never approved automatically; the administrator makes the final decision.
+            </p>
+          </div>
+
           <label>
             Money Requested (₹)
             <input
@@ -1116,10 +1168,11 @@ function RequestModal({ ov, onClose, onSubmitted }) {
               inputMode="decimal"
               min="0.01"
               step="0.01"
-              max={fund?.balance ?? 0}
-              placeholder="Enter amount"
+              max={maxAmount > 0 ? maxAmount : undefined}
+              placeholder={maxAmount > 0 ? `Up to ${maxAmount}` : "Enter amount"}
               value={form.amount}
               onChange={update}
+              disabled={eligLoading || !elig?.canRequest}
             />
           </label>
 
@@ -1134,76 +1187,6 @@ function RequestModal({ ov, onClose, onSubmitted }) {
               onChange={update}
             />
           </label>
-
-          <div className="ss-assessment ss-wide">
-            <div className="ss-assessment__heading">
-              <div>
-                <h4>Available-Balance Assessment</h4>
-                <p>Saved history from the last 28 days</p>
-              </div>
-
-              <span className="ss-assessment__badge">
-                {historyLoading ? "Loading" : `${assessment.count} records`}
-              </span>
-            </div>
-
-            {historyLoading ? (
-              <p className="ss-assessment__message">
-                Loading your saved balance history...
-              </p>
-            ) : historyError ? (
-              <div className="ss-assessment__message ss-assessment__message--error">
-                {historyError}
-              </div>
-            ) : assessment.count === 0 ? (
-              <div className="ss-assessment__message">
-                No saved balance history was found for this period.
-                Historical analysis is unavailable, but the existing
-                eligibility and fund-balance checks still apply.
-              </div>
-            ) : (
-              <div className="ss-assessment__grid">
-                <div className="ss-assessment__item">
-                  <span>Average balance</span>
-                  <strong>{rupees(assessment.average)}</strong>
-                </div>
-
-                <div className="ss-assessment__item">
-                  <span>Lowest balance</span>
-                  <strong>{rupees(assessment.minimum)}</strong>
-                </div>
-
-                <div className="ss-assessment__item">
-                  <span>Highest balance</span>
-                  <strong>{rupees(assessment.maximum)}</strong>
-                </div>
-
-                <div className="ss-assessment__item">
-                  <span>Balance trend</span>
-                  <strong>{formatTrend()}</strong>
-                </div>
-              </div>
-            )}
-
-            <p className="ss-assessment__disclaimer">
-              This is application-calculated balance history, not a live
-              personal bank balance. It is supporting information only;
-              the administrator makes the final decision.
-            </p>
-          </div>
-
-          <p className="ss-note ss-wide">
-            Available Sangha fund:{" "}
-            <strong>{rupees(fund?.balance ?? 0)}</strong>
-          </p>
-
-          {(member?.outstanding ?? 0) > 0 && (
-            <p className="ss-note ss-note--warn ss-wide">
-              Your current outstanding amount is{" "}
-              <strong>{rupees(member.outstanding)}</strong>. Your repayment
-              history may be reviewed by the administrator.
-            </p>
-          )}
 
           {error && <div className="ss-alert ss-wide">{error}</div>}
 
@@ -1220,6 +1203,7 @@ function RequestModal({ ov, onClose, onSubmitted }) {
               type="button"
               className="ss-btn ss-btn--primary"
               onClick={goConfirm}
+              disabled={eligLoading || !elig?.canRequest}
             >
               Continue
             </button>
@@ -1238,17 +1222,22 @@ function RequestModal({ ov, onClose, onSubmitted }) {
             </div>
 
             <div>
-              <dt>Available Sangha Fund</dt>
-              <dd>{rupees(fund?.balance ?? 0)}</dd>
+              <dt>Maximum Eligible Amount</dt>
+              <dd>{rupees(maxAmount)}</dd>
             </div>
 
             <div>
-              <dt>Balance History</dt>
+              <dt>RS-Sangha Score</dt>
               <dd>
-                {historyLoading
-                  ? "Loading..."
-                  : `${assessment.count} saved records`}
+                {elig?.score?.value != null
+                  ? `${elig.score.value} / ${elig.score.max}`
+                  : "Not available"}
               </dd>
+            </div>
+
+            <div>
+              <dt>Eligibility</dt>
+              <dd>{decisionLabel}</dd>
             </div>
 
             <div className="ss-wide">
@@ -1258,8 +1247,8 @@ function RequestModal({ ov, onClose, onSubmitted }) {
           </dl>
 
           <p className="ss-assessment__disclaimer">
-            Your request is not approved automatically. The backend checks
-            eligibility and available funds again when you submit.
+            Your request is not approved automatically. The server checks your score, balance
+            limit, outstanding loans and the Sangha funds again when you submit.
           </p>
 
           {error && <div className="ss-alert">{error}</div>}
@@ -1324,6 +1313,12 @@ function RequestModal({ ov, onClose, onSubmitted }) {
               <dd>{fmtDate(result.requestedAt)}</dd>
             </div>
           </dl>
+
+          {result.eligibilityDecision === "manual_review" && (
+            <p className="ss-note ss-note--warn">
+              Your score is provisional, so the administrator will review your request manually.
+            </p>
+          )}
 
           <button
             type="button"
@@ -1440,6 +1435,104 @@ function ReviewModal({ id, onClose, onChanged }) {
               <div className="ss-wide"><dt>Rejection reason</dt><dd>{d.rejectionReason}</dd></div>
             )}
           </dl>
+
+          {d.eligibility && (
+            <>
+              <h4 className="ss-summary-title">Eligibility at Submission</h4>
+              <dl className="ss-kv ss-kv--2">
+                <div>
+                  <dt>Decision</dt>
+                  <dd>
+                    <Badge
+                      tone={
+                        d.eligibility.decision === "eligible"
+                          ? "green"
+                          : d.eligibility.decision === "manual_review"
+                          ? "amber"
+                          : "red"
+                      }
+                    >
+                      {d.eligibility.decision === "manual_review"
+                        ? "Manual review needed"
+                        : d.eligibility.decision === "eligible"
+                        ? "Eligible"
+                        : "Not eligible"}
+                    </Badge>
+                  </dd>
+                </div>
+                <div>
+                  <dt>RS-Sangha Score</dt>
+                  <dd>
+                    {d.eligibility.score.value != null
+                      ? `${d.eligibility.score.value} / ${d.eligibility.score.max} - ${
+                          d.eligibility.score.status === "sufficient"
+                            ? d.eligibility.score.category
+                            : "Provisional"
+                        }`
+                      : NA}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Minimum Score Required</dt>
+                  <dd>{d.eligibility.score.minimumRequired}</dd>
+                </div>
+                <div>
+                  <dt>Weighted Average Balance</dt>
+                  <dd>
+                    {d.eligibility.balance.weightedAverage != null
+                      ? `${rupees(d.eligibility.balance.weightedAverage)} (${d.eligibility.balance.daysCounted} days)`
+                      : NA}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Balance Limit (avg x {d.eligibility.balance.multiplier})</dt>
+                  <dd>
+                    {d.eligibility.balance.balanceLimit != null
+                      ? rupees(d.eligibility.balance.balanceLimit)
+                      : NA}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Outstanding Principal</dt>
+                  <dd>{rupees(d.eligibility.obligations.outstandingPrincipal)}</dd>
+                </div>
+                <div>
+                  <dt>Maximum Eligible Amount</dt>
+                  <dd>{rupees(d.eligibility.maxEligibleAmount)}</dd>
+                </div>
+                <div>
+                  <dt>Sangha Fund at Submission</dt>
+                  <dd>{rupees(d.eligibility.fund.available ?? 0)}</dd>
+                </div>
+              </dl>
+
+              <ul className="ss-mini">
+                {d.eligibility.score.factors.map((f) => (
+                  <li key={f.key}>
+                    <span>
+                      {f.label} ({f.weight}%)
+                    </span>
+                    <span>{f.status === "calculated" ? `${f.score}%` : "Needs more data"}</span>
+                    <Badge tone={f.status === "calculated" ? "green" : "gray"}>
+                      {f.status === "calculated" ? "Calculated" : "Insufficient"}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+
+              {d.eligibility.reasons
+                .filter((r) => r.level !== "info")
+                .map((r) => (
+                  <p key={r.code} className="ss-note ss-note--warn">
+                    {r.message}
+                  </p>
+                ))}
+              <p className="ss-footnote">
+                Internal RS-Sangha score, not an official CIBIL score. Calculated by the server when
+                the request was submitted.
+              </p>
+            </>
+          )}
 
           <h4 className="ss-summary-title">Previous Repayment History</h4>
           {d.repayments.length === 0 ? (

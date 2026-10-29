@@ -454,6 +454,10 @@ class FundRequest(Base):
     disbursed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # JSON written by the server when the request is submitted: RS-Sangha score, balance limit and
+    # the eligibility breakdown at that moment, so reviewers see what the system saw.
+    eligibility_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     __table_args__ = (
         CheckConstraint("amount_requested > 0", name="ck_fund_request_amount_positive"),
         # A member can have only one open request at a time (stops double submits at DB level)

@@ -39,7 +39,8 @@ The loan tables hold no repayment schedule, so due dates are DERIVED from existi
 (INTEREST_RATE_PERCENT of the outstanding principal) falls due every calendar month counting from
 fund_requests.disbursed_at. A cycle is "overdue" only when its due date has passed AND the total
 interest paid so far (fund_repayments.interest) is still below the interest owed up to that cycle.
-Nothing is overdue before its due date.
+Nothing is overdue before its due date. A loan whose principal is fully repaid is SETTLED: nothing is
+owed on it any more, so it can never be overdue, whatever its status says.
 """
 from __future__ import annotations
 
@@ -158,35 +159,41 @@ def _factor(key: str, *, score: float | None, detail: str, reliable: bool = Fals
     }
 
 
-def _loan_cycles(loan: FundRequest, reps: list, rate: Decimal, now: datetime) -> tuple[int, int, datetime | None]:
-    """Derive (cycles_due, cycles_overdue, next_due_date) for one loan from its existing records."""
+def _loan_cycles(loan: FundRequest, reps: list, rate: Decimal, now: datetime, settled: bool) -> dict:
+    """Derive the interest cycles of one loan from its existing records.
+
+    Returns cycles_due, cycles_overdue, next_due, first_overdue_due (date of the first unpaid due
+    date) and shortfall (interest still missing). A settled loan (no principal left) is never overdue.
+    """
+    result = {"due": 0, "overdue": 0, "next_due": None, "first_overdue_due": None, "shortfall": Decimal(0)}
     start_dt = loan.disbursed_at
     if start_dt is None:
-        return 0, 0, None
+        return result
     approved = _d(loan.amount_approved)
     limit = min(now, loan.completed_at) if loan.completed_at else now   # duties end at completion
     interest_paid = sum((_d(r.interest) for r in reps), Decimal(0))
 
     expected = Decimal(0)
-    due_count = overdue_count = 0
-    next_due = None
     k = 1
     while k <= 600:
         window_start = _add_months(start_dt, k - 1)
         due = _add_months(start_dt, k)
         if due > limit:                       # not due yet -> NOT overdue
-            next_due = None if loan.completed_at else due
+            result["next_due"] = None if (loan.completed_at or settled) else due
             break
         principal_before = sum((_d(r.principal) for r in reps if r.paid_at < window_start), Decimal(0))
         outstanding = max(approved - principal_before, Decimal(0))
         if outstanding <= 0:
             break
         expected += (outstanding * rate / 100).quantize(_PAISA)
-        due_count += 1
-        if interest_paid + _PAISA < expected:  # due date passed and interest still short
-            overdue_count += 1
+        result["due"] += 1
+        if not settled and interest_paid + _PAISA < expected:   # due date passed and interest still short
+            result["overdue"] += 1
+            result["shortfall"] = (expected - interest_paid).quantize(_PAISA)
+            if result["first_overdue_due"] is None:
+                result["first_overdue_due"] = due
         k += 1
-    return due_count, overdue_count, next_due
+    return result
 
 
 def calculate_internal_score(db: Session, user: User, interest_rate_percent: Decimal) -> dict:
@@ -235,17 +242,19 @@ def calculate_internal_score(db: Session, user: User, interest_rate_percent: Dec
         is_active = loan.status in (FundRequestStatus.disbursed, FundRequestStatus.repaying)
         outstanding = max(_d(loan.amount_approved) - paid_principal, Decimal(0)) if is_active else Decimal(0)
         outstanding_total += outstanding
-        due_n, overdue_n, next_due = _loan_cycles(loan, reps, rate, now)
-        overdue_total += overdue_n
+        cycles = _loan_cycles(loan, reps, rate, now, settled=outstanding <= 0)   # no principal left = settled
+        overdue_total += cycles["overdue"]
         loan_rows.append({
             "request_id": loan.id,
             "amount": float(_d(loan.amount_approved)),
             "status": loan.status.value,
             "disbursed_at": loan.disbursed_at,
             "outstanding_principal": float(outstanding),
-            "interest_cycles_due": due_n,
-            "interest_cycles_overdue": overdue_n,
-            "next_interest_due": next_due if is_active else None,
+            "interest_cycles_due": cycles["due"],
+            "interest_cycles_overdue": cycles["overdue"],
+            "next_interest_due": cycles["next_due"] if is_active else None,
+            "first_overdue_due": cycles["first_overdue_due"],
+            "interest_shortfall": float(cycles["shortfall"]),
         })
 
     # ---- 1. repayment history ----

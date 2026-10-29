@@ -161,6 +161,82 @@ function ReviewInfo({ d }) {
 
   return (
     <>
+      {d.eligibility && (
+        <>
+          <h4 className="fr-section-title">Eligibility at submission</h4>
+          <dl className="fr-grid fr-grid--tight">
+            <Field label="Decision">
+              <span
+                className={`fr-badge fr-badge--${
+                  d.eligibility.decision === "eligible"
+                    ? "green"
+                    : d.eligibility.decision === "manual_review"
+                    ? "amber"
+                    : "red"
+                }`}
+              >
+                {d.eligibility.decision === "manual_review"
+                  ? "Manual review needed"
+                  : d.eligibility.decision === "eligible"
+                  ? "Eligible"
+                  : "Not eligible"}
+              </span>
+            </Field>
+            <Field label="RS-Sangha Score">
+              {d.eligibility.score.value != null
+                ? `${d.eligibility.score.value} / ${d.eligibility.score.max} - ${
+                    d.eligibility.score.status === "sufficient"
+                      ? d.eligibility.score.category
+                      : "Provisional"
+                  }`
+                : "Not available"}
+            </Field>
+            <Field label="Minimum Score Required">{d.eligibility.score.minimumRequired}</Field>
+            <Field label="Weighted Average Balance">
+              {d.eligibility.balance.weightedAverage != null
+                ? `${rupees(d.eligibility.balance.weightedAverage)} (${d.eligibility.balance.daysCounted} days)`
+                : "No history"}
+            </Field>
+            <Field label={`Balance Limit (avg x ${d.eligibility.balance.multiplier})`}>
+              {d.eligibility.balance.balanceLimit != null
+                ? rupees(d.eligibility.balance.balanceLimit)
+                : "Not available"}
+            </Field>
+            <Field label="Outstanding Principal">
+              {rupees(d.eligibility.obligations.outstandingPrincipal)}
+            </Field>
+            <Field label="Maximum Eligible Amount">{rupees(d.eligibility.maxEligibleAmount)}</Field>
+            <Field label="Sangha Fund at Submission">{rupees(d.eligibility.fund.available ?? 0)}</Field>
+          </dl>
+
+          <ul className="fr-mini">
+            {d.eligibility.score.factors.map((f) => (
+              <li key={f.key}>
+                <span>
+                  {f.label} ({f.weight}%)
+                </span>
+                <span>{f.status === "calculated" ? `${f.score}%` : "Needs more data"}</span>
+                <span className={`fr-badge fr-badge--${f.status === "calculated" ? "green" : "gray"}`}>
+                  {f.status === "calculated" ? "Calculated" : "Insufficient"}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          {d.eligibility.reasons
+            .filter((r) => r.level !== "info")
+            .map((r) => (
+              <p key={r.code} className="fr-note">
+                {r.message}
+              </p>
+            ))}
+          <p className="fr-note">
+            Internal RS-Sangha score, not an official CIBIL score. Calculated by the server when the
+            request was submitted.
+          </p>
+        </>
+      )}
+
       <h4 className="fr-section-title">Debt</h4>
       <div className={`fr-debt ${hasDebt ? "fr-debt--warn" : ""}`}>
         <strong>{rupees(d.currentOutstanding)}</strong>
