@@ -10,6 +10,7 @@ import SubadminRequests from "./pages/SubadminRequests";
 import ActivityLog from "./pages/ActivityLog";
 import ManageNotifications from "./pages/ManageNotifications";
 import FundRequests from "./pages/FundRequests";
+import SettingsPage from "../Member/pages/SettingsPage";
 import api from "../../../api/axiosInstance";
 import "./SuperAdminDashboard.css";
 
@@ -22,6 +23,7 @@ const PAGE_TITLES = {
   "subadmin-requests": "Subadmin Requests",
   notifications: "Manage Notification",
   "activity-log": "Activity Log",
+  settings: "Settings",
 };
 
 const PAGES = {
@@ -34,11 +36,13 @@ const PAGES = {
   "fund-requests": FundRequests,
   notifications: ManageNotifications,
   "activity-log": ActivityLog,
+  settings: SettingsPage,
 };
 
 const SuperAdminDashboard = () => {
   const [activePage, setActivePage] = useState("overview");
   const [collapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   
 
   const handleLogout = () => {
@@ -48,6 +52,10 @@ const SuperAdminDashboard = () => {
   };
 
   const ActivePageComponent = PAGES[activePage] ?? Overview;
+  const navigateToPage = (page) => {
+    setActivePage(page);
+    setDrawerOpen(false);
+  };
 
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -73,20 +81,34 @@ const SuperAdminDashboard = () => {
 
   return (
     <div className="sa-shell">
+      {drawerOpen && (
+        <button
+          type="button"
+          className="sa-shell__scrim"
+          aria-label="Close navigation"
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
       <Sidebar
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={navigateToPage}
         collapsed={collapsed}
+        drawerOpen={drawerOpen}
       />
       <div className="sa-shell__main">
         <Topbar
           onLogout={handleLogout}
           notificationCount={pendingCount}
-          onNotificationsClick={() => setActivePage("fund-requests")}
+          onNotificationsClick={() => navigateToPage("fund-requests")}
+          onMenuClick={() => setDrawerOpen((open) => !open)}
+          menuOpen={drawerOpen}
         />
 
         <main className="sa-shell__content">
-          <ActivePageComponent onChanged={refreshPendingCount} />
+          <ActivePageComponent
+            onChanged={refreshPendingCount}
+            onLogout={activePage === "settings" ? handleLogout : undefined}
+          />
         </main>
       </div>
     </div>

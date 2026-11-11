@@ -11,6 +11,7 @@ import {
 } from "recharts";
 
 import api from "../../../../api/axiosInstance";
+import { formatAppDate, formatAppDateTime } from "../settingsPreferences";
 import "./MemberBankBalanceHistory.css";
 
 const formatBalance = (balance) =>
@@ -19,11 +20,7 @@ const formatBalance = (balance) =>
     maximumFractionDigits: 2,
   })}`;
 
-const formatRecordedAt = (value) =>
-  new Date(value).toLocaleString("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+const formatRecordedAt = (value) => formatAppDateTime(value);
 
 const getErrorMessage = (error, fallback) =>
   error.response?.data?.detail || error.message || fallback;
@@ -242,9 +239,7 @@ export default function MemberBankBalanceHistory() {
 
                   <XAxis
                     dataKey="recorded_at"
-                    tickFormatter={(value) =>
-                      new Date(value).toLocaleDateString("en-IN")
-                    }
+                    tickFormatter={(value) => formatAppDate(value)}
                   />
 
                   <YAxis

@@ -44,6 +44,48 @@ class LoginUser(BaseModel):
     email: str
     password: str
 
+
+class SettingsProfileUpdate(BaseModel):
+    fullname: str = Field(..., min_length=1, max_length=50)
+
+    @field_validator("fullname")
+    @classmethod
+    def validate_fullname(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Full name cannot be blank.")
+        return value
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
+
+    @field_validator("confirm_password")
+    @classmethod
+    def validate_password_confirmation(cls, value: str, info) -> str:
+        if "new_password" in info.data and value != info.data["new_password"]:
+            raise ValueError("New password and confirmation do not match.")
+        return value
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    in_app_notifications: bool
+    email_notifications: bool = False
+    payment_reminders: bool
+    attendance_notifications: bool
+    emergency_request_updates: bool
+    loan_repayment_reminders: bool
+    account_verification_updates: bool
+    important_announcements: bool
+
+
 class NewSanghas(BaseModel):
     name: str
     address: str
@@ -244,7 +286,9 @@ class FundPaymentReject(BaseModel):
     reason: str = Field(..., min_length=3, max_length=255)
 
 class ContributionCreate(BaseModel):
-    dates: list[date] = Field(..., min_length=1, max_length=31)
+    # Contributions are weekly. The server decides which week is being paid (the current one);
+    # an older client that still sends "dates" is simply ignored.
+    dates: list[date] | None = None
     reference: str = Field(..., min_length=6, max_length=60)
 
 
@@ -322,3 +366,17 @@ class CreditScoreResponse(BaseModel):
     calculated_at: datetime
     factors: list[CreditScoreFactor] = []
     loans: list[CreditScoreLoan] = []
+
+
+class AttendanceMark(BaseModel):
+    member_id: int
+    present: bool
+
+
+class AttendanceSubmit(BaseModel):
+    meeting_date: date
+    records: list[AttendanceMark] = Field(..., min_length=1, max_length=500)
+
+
+class AttendanceUpdate(BaseModel):
+    records: list[AttendanceMark] = Field(..., min_length=1, max_length=500)

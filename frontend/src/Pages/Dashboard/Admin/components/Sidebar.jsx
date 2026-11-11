@@ -7,7 +7,9 @@ import {
   Mail,
   ClipboardList,
   Bell,
-  PiggyBank
+  PiggyBank,
+  CalendarCheck,
+  Settings,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -15,16 +17,19 @@ const NAV_ITEMS = [
   { key: "sanghas", label: "My Sanghas", icon: Building2 },
   { key: "members", label: "Manage Members", icon: Users },
   { key: "SavingsAccount", label: "Sanghas Savings Account", icon: PiggyBank },
+  { key: "attendance", label: "Member Attendance", icon: CalendarCheck },
   { key: "notifications", label: "Manage Notifications", icon: Bell },
   { key: "admin-requests", label: "Make Admin", icon: Mail },
+  { key: "settings", label: "Settings", icon: Settings },
 ];
 
-export default function Sidebar({ activePage, onNavigate, collapsed }) {
+export default function Sidebar({ activePage, onNavigate, collapsed, drawerOpen = false }) {
   return (
     <aside
       className={`sa-sidebar ${
         collapsed ? "sa-sidebar--collapsed" : ""
-      }`}
+      } ${drawerOpen ? "sa-sidebar--open" : ""}`}
+      aria-label="Dashboard navigation"
     >
       <div className="sa-sidebar__brand">
         <span className="sa-sidebar__mark">RS</span>
@@ -43,6 +48,7 @@ export default function Sidebar({ activePage, onNavigate, collapsed }) {
           return (
             <button
               key={item.key}
+              type="button"
               className={`sa-sidebar__link ${
                 activePage === item.key
                   ? "sa-sidebar__link--active"

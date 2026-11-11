@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import api from "../../../../api/axiosInstance";
+import { formatAppDate, formatAppDateTime } from "../../Member/settingsPreferences";
 import "./FundRequests.css";
 
 /* ====================================================================
@@ -24,24 +25,10 @@ const rupees = (v) =>
     : `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
 const fmtDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : "—";
+  iso ? formatAppDate(iso) : "—";
 
 const fmtDateTime = (iso) =>
-  iso
-    ? new Date(iso).toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "—";
+  iso ? formatAppDateTime(iso) : "—";
 
 const errorText = (err, fallback) => {
   if (err?.response?.status === 401) {
@@ -267,7 +254,7 @@ function ReviewInfo({ d }) {
       <h4 className="fr-section-title">Contributions to the Sangha</h4>
       <dl className="fr-grid fr-grid--tight">
         <Field label="Total Contributed">{rupees(c.totalPaid)}</Field>
-        <Field label="Days Paid">{c.daysPaid}</Field>
+        <Field label="Weeks Paid">{c.weeksPaid}</Field>
         <Field label="Contributing Since">{c.since ? fmtDate(c.since) : "No contributions yet"}</Field>
         {c.waitingAmount > 0 && (
           <Field label="Waiting for Confirmation">{rupees(c.waitingAmount)}</Field>
@@ -279,10 +266,10 @@ function ReviewInfo({ d }) {
           <li key={m.month}>
             <span>{m.month}</span>
             <span>
-              {m.paidDays} of {m.expectedDays} days · {rupees(m.paidAmount)}
+              {m.paidWeeks} of {m.expectedWeeks} weeks · {rupees(m.paidAmount)}
             </span>
-            <span className={`fr-badge fr-badge--${m.missedDays === 0 ? "green" : "red"}`}>
-              {m.missedDays === 0 ? "On track" : `${m.missedDays} missed`}
+            <span className={`fr-badge fr-badge--${m.missedWeeks === 0 ? "green" : "red"}`}>
+              {m.missedWeeks === 0 ? "On track" : `${m.missedWeeks} missed`}
             </span>
           </li>
         ))}
@@ -334,7 +321,7 @@ function ApproveModal({ item, onClose, onConfirm }) {
   const verified = d?.verification === "Verified";
   const fundShort = fund != null && n > fund;
   const hasDebt = (d?.currentOutstanding ?? 0) > 0;
-  const missedThisMonth = d?.contributions?.months?.[0]?.missedDays ?? 0;
+  const missedThisMonth = d?.contributions?.months?.[0]?.missedWeeks ?? 0;
   const canConfirm =
     !busy && !loading && !loadError && verified && n > 0 && n <= item.amount && !fundShort;
 
@@ -640,8 +627,8 @@ function PaymentsToConfirm({ onChanged }) {
         id: x.batchId,
         memberName: x.memberName,
         sanghaName: x.sanghaName,
-        label: `Contribution · ${x.days.length} day${x.days.length === 1 ? "" : "s"}`,
-        days: x.days,
+        label: `Weekly contribution (week of ${fmtDate(x.weeks[0])})`,
+        weeks: x.weeks,
         amount: x.amount,
         reference: x.reference,
         createdAt: x.createdAt,
@@ -723,9 +710,9 @@ function PaymentsToConfirm({ onChanged }) {
               </div>
             </div>
 
-            {p.days && (
+            {p.weeks && (
               <div className="fr-pay__ref">
-                Days: <b>{p.days.map((d) => fmtDate(d)).join(", ")}</b>
+                Week of: <b>{p.weeks.map((d) => fmtDate(d)).join(", ")}</b>
               </div>
             )}
 

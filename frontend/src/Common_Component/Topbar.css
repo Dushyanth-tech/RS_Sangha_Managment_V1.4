@@ -74,6 +74,20 @@
   color: var(--tb-bright);
 }
 
+.tb__menu {
+  display: none;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--tb-border);
+  border-radius: 12px;
+  background: var(--tb-faint);
+  color: var(--tb-royal);
+  cursor: pointer;
+}
+
 /* remove the browser's built-in clear "x" styling differences */
 .tb__search-input::-webkit-search-cancel-button {
   cursor: pointer;
@@ -223,6 +237,10 @@
 
   .tb__search-icon {
     left: 12px;
+  }
+
+  .tb__menu {
+    display: inline-flex;
   }
 
   .tb__name {

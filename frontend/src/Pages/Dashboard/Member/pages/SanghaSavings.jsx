@@ -31,6 +31,7 @@ import {
 } from "recharts";
 
 import api from "../../../../api/axiosInstance";
+import { formatAppDate, formatAppDateTime } from "../settingsPreferences";
 import "./SanghaSavings.css";
 
 /* ====================================================================
@@ -45,13 +46,7 @@ const rupees = (v) =>
     : `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
 const fmtDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : "—";
+  iso ? formatAppDate(iso) : "—";
 
 const errorText = (err, fallback) => {
   if (err?.response?.status === 401) {
@@ -549,10 +544,7 @@ function AvailableBalanceHistory({ items, loading, error, snapshotError, onRetry
                   />
                   <Tooltip
                     labelFormatter={(value) =>
-                      new Date(value).toLocaleString("en-IN", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })
+                      formatAppDateTime(value)
                     }
                     formatter={(value) => [rupees(value), "Bank Balance"]}
                   />

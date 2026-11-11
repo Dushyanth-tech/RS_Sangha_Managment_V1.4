@@ -819,11 +819,26 @@ body {
 @media (max-width: 900px) {
 
   .md-topbar {
+    flex-wrap: wrap;
     padding: 14px 20px;
   }
 
   .md-navigation {
-    margin-left: 25px;
+    order: 3;
+    width: 100%;
+    flex-basis: 100%;
+    margin: 8px 0 0;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  .md-navigation::-webkit-scrollbar {
+    display: none;
+  }
+
+  .md-profile {
+    margin-left: auto;
   }
 
   .md-profile__name {

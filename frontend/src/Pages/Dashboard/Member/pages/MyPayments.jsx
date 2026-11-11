@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import api from "../../../../api/axiosInstance";
+import { formatAppDate } from "../settingsPreferences";
 import "./MyPayments.css";
 
 /* ====================================================================
@@ -31,19 +32,10 @@ const rupees = (v) =>
     : `₹${Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
 const fmtDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : "—";
+  iso ? formatAppDate(iso) : "—";
 
 const dayShort = (iso) =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-  });
+  formatAppDate(`${iso}T00:00:00`);
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -158,12 +150,31 @@ function KV({ label, value }) {
 }
 
 /* ====================================================================
-   CONTRIBUTION CALENDAR
+   WEEKLY CONTRIBUTION (one payment per week, on any day of the week)
 ==================================================================== */
 
-function Calendar({ days, selected, onToggle }) {
-  const blanks = new Date(`${days[0].date}T00:00:00`).getDay();
-  const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
+const WEEK_STATE = {
+  paid: { label: "Paid" },
+  waiting: { label: "Waiting for admin" },
+  missed: { label: "Missed" },
+  due: { label: "Due this week" },
+};
+
+// Month calendar. Each row is one week (Monday to Sunday). Only the day a member PAID is coloured,
+// not the whole week: blue = paid and confirmed, amber = waiting for the admin.
+function Calendar({ days }) {
+  const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
+  const blanks = (new Date(`${days[0].date}T00:00:00`).getDay() + 6) % 7;   // Monday first
+
+  const label = (d) =>
+    ({
+      paid: "paid",
+      waiting: "waiting for the admin",
+      missed: "week missed",
+      due: "this week is open for payment",
+      upcoming: "upcoming",
+      none: "",
+    })[d.state];
 
   return (
     <div>
@@ -176,55 +187,30 @@ function Calendar({ days, selected, onToggle }) {
         {Array.from({ length: blanks }).map((_, i) => (
           <span key={`b${i}`} />
         ))}
-        {days.map((d) => {
-          const payable = d.state === "missed" || d.state === "due";
-          const isSelected = selected.has(d.date);
-          const cls = `mp-cal__day mp-cal__day--${d.state} ${isSelected ? "mp-cal__day--sel" : ""}`;
-
-          return payable ? (
-            <button
-              key={d.date}
-              type="button"
-              className={cls}
-              aria-pressed={isSelected}
-              aria-label={`${dayShort(d.date)}, ${d.state === "missed" ? "missed" : "due today"}`}
-              onClick={() => onToggle(d.date)}
-            >
-              {d.day}
-            </button>
-          ) : (
-            <span key={d.date} className={cls}>
-              {d.day}
-            </span>
-          );
-        })}
+        {days.map((d) => (
+          <span
+            key={d.date}
+            className={`mp-cal__day mp-cal__day--${d.state}`}
+            aria-label={`${dayShort(d.date)}${label(d) ? `, ${label(d)}` : ""}`}
+          >
+            {d.day}
+          </span>
+        ))}
       </div>
 
       <ul className="mp-legend">
         <li><i className="mp-dot mp-dot--paid" /> Paid</li>
         <li><i className="mp-dot mp-dot--waiting" /> Waiting for admin</li>
-        <li><i className="mp-dot mp-dot--missed" /> Missed</li>
-        <li><i className="mp-dot mp-dot--due" /> Due / upcoming</li>
+        <li><i className="mp-dot mp-dot--missed" /> Missed week</li>
+        <li><i className="mp-dot mp-dot--due" /> This week (pay any day)</li>
       </ul>
     </div>
   );
 }
 
-function ContributionCard({
-  con,
-  loading,
-  error,
-  onRetry,
-  selected,
-  onToggle,
-  onSelectAll,
-  onClear,
-  onPay,
-}) {
-  const payable = (con?.days ?? []).filter((d) => d.state === "missed" || d.state === "due");
-  const count = selected.size;
-  const allSelected = payable.length > 0 && count === payable.length;
-  const pct = con ? Math.min(Math.round((con.daysPaid / con.daysInMonth) * 100), 100) : 0;
+function ContributionCard({ con, loading, error, onRetry, onPay }) {
+  const pct = con && con.weeksTotal > 0 ? Math.min(Math.round((con.weeksPaid / con.weeksTotal) * 100), 100) : 0;
+  const thisWeek = WEEK_STATE[con?.thisWeek] ?? WEEK_STATE.due;
 
   return (
     <Card
@@ -232,8 +218,8 @@ function ContributionCard({
       title="Sangha Contribution"
       subtitle={
         con
-          ? `${con.month} · every member pays ${rupees(con.dailyAmount)} a day, with or without a debt`
-          : "Every member pays this, with or without a debt"
+          ? `${con.month}  every member pays ${rupees(con.weeklyAmount)} once a week, on any day of the week`
+          : "Every member pays this once a week, with or without a debt"
       }
     >
       {loading ? (
@@ -243,52 +229,44 @@ function ContributionCard({
       ) : !con ? null : (
         <>
           <dl className="mp-kv mp-kv--4">
-            <KV label="Daily Contribution" value={rupees(con.dailyAmount)} />
-            <KV label="Days Paid" value={`${con.daysPaid} / ${con.daysInMonth}`} />
+            <KV label="Weekly Contribution" value={rupees(con.weeklyAmount)} />
+            <KV label="This Week" value={thisWeek.label} />
+            <KV label="Weeks Paid" value={`${con.weeksPaid} / ${con.weeksTotal}`} />
             <KV label="Paid This Month" value={rupees(con.paidAmount)} />
-            <KV label="Remaining" value={rupees(con.remaining)} />
           </dl>
 
           <div className="mp-progress">
             <div className="mp-progress__top">
-              <span>Month progress</span>
+              <span>Recent weeks paid</span>
               <strong>{pct}%</strong>
             </div>
-            <div className="mp-bar" role="img" aria-label={`${pct}% of the month paid`}>
+            <div className="mp-bar" role="img" aria-label={`${pct}% of recent weeks paid`}>
               <span style={{ width: `${pct}%` }} />
             </div>
           </div>
 
-          <Calendar days={con.days} selected={selected} onToggle={onToggle} />
+          <Calendar days={con.days} />
 
-          {con.payBlocker && <p className="mp-note">{con.payBlocker}</p>}
+          {con.payBlocker && (
+            <p className={`mp-note ${con.thisWeek === "paid" ? "mp-note--ok" : ""}`}>{con.payBlocker}</p>
+          )}
 
-          {payable.length > 0 ? (
+          {con.thisWeek === "due" && (
             <>
-              <p className="mp-hint">Tap the red or highlighted days to choose what you are paying for.</p>
+              <p className="mp-hint">
+                Pay once this week ({con.weekLabel}), on any day. The day you pay is marked on the calendar.
+              </p>
               <div className="mp-contrib__actions">
                 <button
                   type="button"
-                  className="mp-btn"
-                  disabled={!con.canPay}
-                  onClick={allSelected ? onClear : onSelectAll}
-                >
-                  {allSelected ? "Clear selection" : `Select all due days (${payable.length})`}
-                </button>
-                <button
-                  type="button"
                   className="mp-btn mp-btn--primary"
-                  disabled={!con.canPay || count === 0}
+                  disabled={!con.canPay}
                   onClick={onPay}
                 >
-                  {count > 0
-                    ? `Pay ${rupees(count * con.dailyAmount)} for ${plural(count, "day")}`
-                    : "Choose days to pay"}
+                  {`Pay ${rupees(con.weeklyAmount)} for this week`}
                 </button>
               </div>
             </>
-          ) : (
-            <p className="mp-note mp-note--ok">You are up to date for this month.</p>
           )}
         </>
       )}
@@ -448,7 +426,6 @@ export default function MyPayments({ onNavigate }) {
 
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(() => new Set());
   const [modal, setModal] = useState(null); // { type: "contribution" | "interest" | "principal", ... }
 
   const load = useCallback(async () => {
@@ -498,21 +475,6 @@ export default function MyPayments({ onNavigate }) {
   const pendingKinds = new Set(pendingPayments.map((p) => p.kind));
   const hasDebt = (member?.outstanding ?? 0) > 0;
 
-  const payableDates = useMemo(
-    () => new Set((con?.days ?? []).filter((d) => d.state === "missed" || d.state === "due").map((d) => d.date)),
-    [con],
-  );
-
-  const toggleDay = (date) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(date)) next.delete(date);
-      else next.add(date);
-      return next;
-    });
-
-  const selectedDates = [...selected].sort();
-
   /* ---------- payment history (contributions + interest + principal) ---------- */
   const payments = useMemo(() => {
     const ledger = (hist?.transactions ?? []).filter((t) => t.direction === "Paid").map(toPayment);
@@ -533,13 +495,12 @@ export default function MyPayments({ onNavigate }) {
     const contributions = (con?.history ?? []).map((b) => ({
       id: `c${b.batchId}`,
       kind: "Contribution",
-      type: `Contribution (${plural(b.days.length, "day")})`,
+      type: b.weeks.length === 1 ? `Contribution (week of ${fmtDate(b.weeks[0])})` : `Contribution (${plural(b.weeks.length, "week")})`,
       amount: b.amount,
       date: b.createdAt,
       ref: b.reference,
       status: b.status === "Confirmed" ? "Paid" : b.status === "Rejected" ? "Failed" : "Pending",
       payKind: "contribution",
-      dates: b.days,
       reason: b.rejectionReason,
     }));
 
@@ -576,8 +537,8 @@ export default function MyPayments({ onNavigate }) {
   /* ---------- retry a rejected payment ---------- */
   const retryTarget = (p) => {
     if (p.payKind === "contribution") {
-      const dates = (p.dates ?? []).filter((d) => payableDates.has(d));
-      return dates.length > 0 && con?.canPay ? { type: "contribution", dates } : null;
+      // a rejected payment can be retried while this week is still unpaid
+      return con?.canPay && con?.thisWeek === "due" ? { type: "contribution" } : null;
     }
     const debt = debts.find((d) => d.id === p.requestId);
     if (!debt || pendingKinds.has(p.payKind)) return null;
@@ -590,16 +551,16 @@ export default function MyPayments({ onNavigate }) {
     if (!modal) return null;
 
     if (modal.type === "contribution") {
-      const total = modal.dates.length * (con?.dailyAmount ?? 0);
+      const total = con?.weeklyAmount ?? 0;
       return {
-        key: `con-${modal.dates.join(",")}`,
-        title: "Pay Contribution",
-        subtitle: `${plural(modal.dates.length, "day")} × ${rupees(con?.dailyAmount)} to the Sangha`,
+        key: `con-${con?.weekStart}`,
+        title: "Pay Weekly Contribution",
+        subtitle: `Week of ${con?.weekLabel ?? ""} - ${rupees(total)} to the Sangha`,
         amount: total,
         max: total,
         editable: false,
-        submit: (_n, reference) =>
-          api.post("/sangha-savings/contributions", { dates: modal.dates, reference }),
+        // the server decides the week; only the transaction reference is sent
+        submit: (_n, reference) => api.post("/sangha-savings/contributions", { reference }),
       };
     }
 
@@ -637,7 +598,7 @@ export default function MyPayments({ onNavigate }) {
         </span>
         <div>
           <h1>My Payments</h1>
-          <p>Your daily Sangha contribution, any interest and debt, and every payment you have made.</p>
+          <p>Your weekly Sangha contribution, any interest and debt, and every payment you have made.</p>
         </div>
       </header>
 
@@ -650,7 +611,7 @@ export default function MyPayments({ onNavigate }) {
           <div>
             {waitingContributions.map((b) => (
               <p key={b.batchId}>
-                Your <b>{rupees(b.amount)}</b> contribution for {plural(b.days.length, "day")} (ref{" "}
+                Your <b>{rupees(b.amount)}</b> contribution for the week of {fmtDate(b.weeks[0])} (ref{" "}
                 <b>{b.reference}</b>) is waiting for the admin to confirm.
               </p>
             ))}
@@ -668,7 +629,7 @@ export default function MyPayments({ onNavigate }) {
       <div className="mp-stats">
         <Stat
           icon={Landmark}
-          label="Your Bank Balance"
+          label="Bank Balance"
           value={rupees(member ? member.bankBalance : null)}
           desc="Money in your account"
           tone="green"
@@ -679,7 +640,7 @@ export default function MyPayments({ onNavigate }) {
           icon={PiggyBank}
           label="Contribution Due"
           value={con ? rupees(con.dueNow) : NA}
-          desc="Unpaid days up to today"
+          desc="This week's contribution"
           tone={con?.dueNow > 0 ? "red" : undefined}
           loading={loading}
         />
@@ -716,11 +677,7 @@ export default function MyPayments({ onNavigate }) {
             loading={loading}
             error={conError}
             onRetry={load}
-            selected={selected}
-            onToggle={toggleDay}
-            onSelectAll={() => setSelected(new Set(payableDates))}
-            onClear={() => setSelected(new Set())}
-            onPay={() => setModal({ type: "contribution", dates: selectedDates })}
+            onPay={() => setModal({ type: "contribution" })}
           />
 
           <Card
@@ -934,7 +891,6 @@ export default function MyPayments({ onNavigate }) {
           submit={modalProps.submit}
           onClose={() => setModal(null)}
           onDone={() => {
-            setSelected(new Set());
             load();
           }}
         />

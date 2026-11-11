@@ -5,8 +5,8 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.credit_score import calculate_internal_score
 from app.emergency_eligibility import evaluate_emergency_eligibility
-from app.authSchema import CreditScoreResponse
-from app.authSchema import NewUser, LoginUser, NewSanghas, Search, AdminRequestCreate,AddAdminRequest,RemoveSanghasPayload,SanghaUpdate, ProfileWizardUpdate, NotificationCreate, ClearNotificationsRequest, SanghaSavingsAccountCreate, CibilUpdate, FundRequestCreate, FundRequestReview, FundRepaymentCreate, FundPaymentCreate, FundPaymentConfirm, FundPaymentReject, ContributionCreate
+from app.authSchema import CreditScoreResponse, AttendanceSubmit, AttendanceUpdate
+from app.authSchema import NewUser, LoginUser, NewSanghas, Search, AdminRequestCreate,AddAdminRequest,RemoveSanghasPayload,SanghaUpdate, ProfileWizardUpdate, NotificationCreate, ClearNotificationsRequest, SanghaSavingsAccountCreate, CibilUpdate, FundRequestCreate, FundRequestReview, FundRepaymentCreate, FundPaymentCreate, FundPaymentConfirm, FundPaymentReject, ContributionCreate, SettingsProfileUpdate, ChangePasswordRequest, NotificationPreferencesUpdate
 from app.authSchema import (
     MemberBankBalanceSnapshotCreateResponse,
     MemberBankBalanceSnapshotResponse,
@@ -25,6 +25,8 @@ from app.authModal import (
     LoanStatus, VerificationRequest,    FundRequest, FundRepayment, FundTransaction, FundRequestStatus,
     NotificationType, RecipientRule, NotificationStatus, FundPayment, Contribution,
     MemberBankBalanceSnapshot, MemberAvailableBalanceSnapshot,
+    UserNotificationPreferences,
+    AttendanceSession, AttendanceRecord,
 )
 from app.dbconnection import get_db, engine, Base
 from app.auth import create_access_token, hash_password, verify_password, get_current_user
@@ -1455,6 +1457,147 @@ def get_profile_wizard(db: Session = Depends(get_db), current_user_id=Depends(ge
     }
 
 
+def _serialize_notification_preferences(preferences: UserNotificationPreferences) -> dict:
+    return {
+        "in_app_notifications": preferences.in_app_notifications,
+        "email_notifications": preferences.email_notifications,
+        "payment_reminders": preferences.payment_reminders,
+        "attendance_notifications": preferences.attendance_notifications,
+        "emergency_request_updates": preferences.emergency_request_updates,
+        "loan_repayment_reminders": preferences.loan_repayment_reminders,
+        "account_verification_updates": preferences.account_verification_updates,
+        "important_announcements": preferences.important_announcements,
+    }
+
+
+@app.patch("/me/settings/profile")
+def update_settings_profile(
+    payload: SettingsProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    user = _load_user(db, current_user_id)
+    user.fullname = payload.fullname
+    try:
+        db.commit()
+        db.refresh(user)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to update your profile.") from exc
+    return {"fullname": user.fullname}
+
+
+@app.post("/me/settings/change-password")
+def change_account_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    user = _load_user(db, current_user_id)
+    if not verify_password(payload.current_password, user.password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    if verify_password(payload.new_password, user.password):
+        raise HTTPException(status_code=400, detail="New password must be different from the current password.")
+
+    user.password = hash_password(payload.new_password)
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to change your password.") from exc
+    return {"detail": "Password changed successfully."}
+
+
+@app.get("/me/settings/notification-preferences")
+def get_notification_preferences(
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    user = _load_user(db, current_user_id)
+    preferences = (
+        db.query(UserNotificationPreferences)
+        .filter(UserNotificationPreferences.user_id == user.id)
+        .first()
+    )
+    if not preferences:
+        preferences = UserNotificationPreferences(user_id=user.id)
+        db.add(preferences)
+        try:
+            db.commit()
+            db.refresh(preferences)
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Unable to load notification preferences.") from exc
+    return _serialize_notification_preferences(preferences)
+
+
+@app.put("/me/settings/notification-preferences")
+def update_notification_preferences(
+    payload: NotificationPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    if payload.email_notifications:
+        raise HTTPException(
+            status_code=409,
+            detail="Email notifications are unavailable because email delivery is not configured.",
+        )
+
+    user = _load_user(db, current_user_id)
+    preferences = (
+        db.query(UserNotificationPreferences)
+        .filter(UserNotificationPreferences.user_id == user.id)
+        .first()
+    )
+    if not preferences:
+        preferences = UserNotificationPreferences(user_id=user.id)
+        db.add(preferences)
+
+    for field in NotificationPreferencesUpdate.model_fields:
+        setattr(preferences, field, getattr(payload, field))
+
+    try:
+        db.commit()
+        db.refresh(preferences)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to save notification preferences.") from exc
+    return _serialize_notification_preferences(preferences)
+
+
+@app.get("/me/settings/sanghas")
+def get_settings_sanghas(
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    user = _load_user(db, current_user_id)
+    query = db.query(Sanghas)
+    if user.role == "member":
+        if not user.sangha_id:
+            return []
+        query = query.filter(Sanghas.id == user.sangha_id)
+    elif user.role == "admin":
+        query = query.filter(Sanghas.admin_id == user.id)
+    elif user.role == "subadmin":
+        query = query.filter(Sanghas.subadmin_id == user.id)
+    elif user.role != "superadmin":
+        return []
+
+    return [
+        {
+            "id": sangha.id,
+            "name": sangha.name,
+            "code": sangha.code,
+            "address": sangha.address,
+            "city": sangha.city,
+            "state": sangha.state,
+            "membersCount": sangha.membersCount,
+            "canEdit": user.role in ("admin", "superadmin"),
+        }
+        for sangha in query.order_by(Sanghas.name.asc()).all()
+    ]
+
+
 @app.patch("/me/complete-profile")   # was @app.post(...)
 async def complete_profile(
     fullname: str | None = Form(None),
@@ -1725,6 +1868,12 @@ def create_notification(
     if not payload.title.strip() or not payload.message.strip():
         raise HTTPException(status_code=422, detail="Title and message are required.")
 
+    notification_type = getattr(payload.type, "value", payload.type)
+    preference_category = {
+        "Account Verification": "account_verification_updates",
+        "Announcement": "important_announcements",
+        "Important": "important_announcements",
+    }.get(notification_type)
     notification = Notification(
         title=payload.title.strip(),
         type=payload.type,
@@ -1735,6 +1884,7 @@ def create_notification(
         status="Sent" if payload.send_now else "Draft",
         created_by=admin.id,
         sent_at=datetime.now(timezone.utc) if payload.send_now else None,
+        preference_category=preference_category,
     )
     db.add(notification)
     db.flush()
@@ -1752,6 +1902,14 @@ def create_notification(
 
 @app.get("/me/notifications")
 def get_my_notifications(db: Session = Depends(get_db), current_user_id=Depends(get_current_user)):
+    preferences = (
+        db.query(UserNotificationPreferences)
+        .filter(UserNotificationPreferences.user_id == int(current_user_id))
+        .first()
+    )
+    if preferences and not preferences.in_app_notifications:
+        return []
+
     rows = (
         db.query(NotificationRecipient, Notification)
         .join(Notification, NotificationRecipient.notification_id == Notification.id)
@@ -1759,6 +1917,14 @@ def get_my_notifications(db: Session = Depends(get_db), current_user_id=Depends(
         .order_by(Notification.sent_at.desc())
         .all()
     )
+    preference_flags = {
+        "payment_reminders": preferences.payment_reminders,
+        "attendance_notifications": preferences.attendance_notifications,
+        "emergency_request_updates": preferences.emergency_request_updates,
+        "loan_repayment_reminders": preferences.loan_repayment_reminders,
+        "account_verification_updates": preferences.account_verification_updates,
+        "important_announcements": preferences.important_announcements,
+    } if preferences else {}
     return [
         {
             "id": recipient.id,
@@ -1770,6 +1936,7 @@ def get_my_notifications(db: Session = Depends(get_db), current_user_id=Depends(
             "isRead": recipient.is_read,
         }
         for recipient, notif in rows
+        if not notif.preference_category or preference_flags.get(notif.preference_category, True)
     ]
 
 
@@ -1995,6 +2162,7 @@ def verify_member(
         status="Sent",
         created_by=verifier.id,
         sent_at=datetime.now(timezone.utc),
+        preference_category="account_verification_updates",
     )
     db.add(notification)
     db.flush()
@@ -2118,6 +2286,7 @@ def create_sangha_savings_account(
             status="Sent",
             created_by=current_user.id,
             sent_at=datetime.now(timezone.utc),
+            preference_category="important_announcements",
         )
         db.add(notification)
         db.flush()
@@ -2370,6 +2539,7 @@ def request_account_verification(db: Session = Depends(get_db), current_user_id=
         status="Sent",
         created_by=user.id,
         sent_at=datetime.now(timezone.utc),
+        preference_category="account_verification_updates",
     )
     db.add(notification)
     db.flush()
@@ -2794,7 +2964,15 @@ def _fund_block(db: Session, sangha_id: int, balance: Decimal) -> dict:
     }
 
 
-def _notify_user(db: Session, sender_id: int, user_id: int, title: str, message: str, sangha_id=None):
+def _notify_user(
+    db: Session,
+    sender_id: int,
+    user_id: int,
+    title: str,
+    message: str,
+    sangha_id=None,
+    preference_category: str = "important_announcements",
+):
     n = Notification(
         title=title,
         type=NotificationType.announcement,
@@ -2805,6 +2983,7 @@ def _notify_user(db: Session, sender_id: int, user_id: int, title: str, message:
         status=NotificationStatus.sent,
         created_by=sender_id,
         sent_at=datetime.now(timezone.utc),
+        preference_category=preference_category,
     )
     db.add(n)
     db.flush()
@@ -3152,6 +3331,7 @@ def create_fund_request(
             f"{user.fullname} has requested {payload.amount:,.2f} from {sangha.name}." + note
             + " Please review it in Sangha Savings.",
             sangha.id,
+            preference_category="emergency_request_updates",
         )
 
     try:
@@ -3187,23 +3367,27 @@ def _month_shift(first_of_month: date, k: int) -> date:
 
 
 def _member_contribution_summary(db: Session, member_id: int) -> dict:
-    """What this member has contributed to the Sangha: all-time totals plus the last 6 months."""
+    """What this member has contributed to the Sangha (weekly): all-time totals plus the last 6 months."""
     today = _today_ist()
     cur = today.replace(day=1)
+    this_week = _week_start(today)
 
     first_date = (
         db.query(func.min(Contribution.for_date))
         .filter(Contribution.member_id == member_id, Contribution.status == "Confirmed")
         .scalar()
     )
+    first_week = _week_start(first_date) if first_date else None
     # Months before the first contribution are not counted as missed
     start = cur if not first_date else max(_month_shift(cur, -5), first_date.replace(day=1))
 
-    totals = (
-        db.query(func.coalesce(func.sum(Contribution.amount), 0), func.count(Contribution.id))
+    confirmed = (
+        db.query(Contribution.for_date, Contribution.amount)
         .filter(Contribution.member_id == member_id, Contribution.status == "Confirmed")
-        .one()
+        .all()
     )
+    total_paid = sum((_d(a) for _, a in confirmed), ZERO)
+    weeks_paid_all = len({_week_start(d) for d, _ in confirmed})
     waiting_amount = (
         db.query(func.coalesce(func.sum(Contribution.amount), 0))
         .filter(Contribution.member_id == member_id, Contribution.status == "Pending")
@@ -3215,47 +3399,59 @@ def _member_contribution_summary(db: Session, member_id: int) -> dict:
         .filter(
             Contribution.member_id == member_id,
             Contribution.status.in_(("Pending", "Confirmed")),
-            Contribution.for_date >= start,
+            Contribution.for_date >= _week_start(start),
         )
         .all()
     )
-    paid, waiting, amount = {}, {}, {}
+    by_week: dict[date, str] = {}
+    amount_by_month: dict[tuple, Decimal] = {}
     for r in rows:
-        key = (r.for_date.year, r.for_date.month)
+        wk = _week_start(r.for_date)
+        if r.status == "Confirmed" or wk not in by_week:
+            by_week[wk] = r.status
         if r.status == "Confirmed":
-            paid[key] = paid.get(key, 0) + 1
-            amount[key] = amount.get(key, ZERO) + _d(r.amount)
-        else:
-            waiting[key] = waiting.get(key, 0) + 1
+            key = (r.for_date.year, r.for_date.month)
+            amount_by_month[key] = amount_by_month.get(key, ZERO) + _d(r.amount)
 
     months = []
     m = start
     while m <= cur:
-        key = (m.year, m.month)
         last = date(m.year, m.month, calendar.monthrange(m.year, m.month)[1])
-        lo = max(m, first_date) if first_date else m
-        hi = min(last, today)
-        expected = max((hi - lo).days + 1, 0)
-        paid_days, waiting_days = paid.get(key, 0), waiting.get(key, 0)
+        lo = max(m, first_week) if first_week else m
+        hi = min(last, this_week)
+        paid = waiting = missed = 0
+        wk = _week_start(lo)
+        if wk < lo:
+            wk += timedelta(days=7)        # a week belongs to the month its Monday falls in
+        while wk <= hi:
+            st = by_week.get(wk)
+            if st == "Confirmed":
+                paid += 1
+            elif st == "Pending":
+                waiting += 1
+            elif wk < this_week:           # the current week is still in progress, not a miss
+                missed += 1
+            wk += timedelta(days=7)
         months.append({
             "month": m.strftime("%B %Y"),
-            "expectedDays": expected,
-            "paidDays": paid_days,
-            "waitingDays": waiting_days,
-            "missedDays": max(expected - paid_days - waiting_days, 0),
-            "paidAmount": float(amount.get(key, ZERO)),
+            "expectedWeeks": paid + waiting + missed,
+            "paidWeeks": paid,
+            "waitingWeeks": waiting,
+            "missedWeeks": missed,
+            "paidAmount": float(amount_by_month.get((m.year, m.month), ZERO)),
         })
         m = _month_shift(m, 1)
     months.reverse()   # newest first
 
     return {
-        "dailyAmount": float(CONTRIBUTION_PER_DAY),
-        "totalPaid": float(_d(totals[0])),
-        "daysPaid": int(totals[1]),
+        "weeklyAmount": float(CONTRIBUTION_PER_WEEK),
+        "totalPaid": float(total_paid),
+        "weeksPaid": weeks_paid_all,
         "since": first_date.isoformat() if first_date else None,
         "waitingAmount": float(_d(waiting_amount)),
         "months": months,
     }
+
 
 @app.get("/sangha-savings/requests/{request_id}")
 def get_fund_request_detail(
@@ -3393,6 +3589,7 @@ def review_fund_request(
             f"Approved Amount: ₹{amount:,.2f}\n"
             f"Status: Approved & Credited",
             req.sangha_id,
+            preference_category="emergency_request_updates",
         )
 
     else:  # reject
@@ -3410,6 +3607,7 @@ def review_fund_request(
             f"Reason: {reason}\n"
             f"Status: Rejected",
             req.sangha_id,
+            preference_category="emergency_request_updates",
         )
 
     req.reviewed_by = user.id
@@ -3452,6 +3650,7 @@ def disburse_fund_request(
     _notify_user(
         db, user.id, req.member_id, "Emergency money disbursed",
         f"₹{amount:,.2f} has been credited to you from Sangha Savings.", req.sangha_id,
+        preference_category="emergency_request_updates",
     )
     db.commit()
     return {"detail": "Disbursed.", "status": req.status.value}
@@ -3509,6 +3708,7 @@ def record_fund_repayment(
         db, user.id, req.member_id, "Repayment recorded",
         f"A repayment of ₹{principal + interest:,.2f} was recorded. Remaining: ₹{remaining:,.2f}.",
         req.sangha_id,
+        preference_category="loan_repayment_reminders",
     )
     db.commit()
     return {"detail": "Repayment recorded.", "status": req.status.value, "remaining": float(remaining)}
@@ -3676,6 +3876,7 @@ def _apply_repayment(db: Session, user: User, req: FundRequest, principal: Decim
         f"Your payment of ₹{principal + interest:,.2f} has been received and recorded. "
         f"Remaining principal: ₹{remaining:,.2f}.",
         req.sangha_id,
+        preference_category="loan_repayment_reminders",
     )
     return {"status": req.status.value, "remaining": float(remaining)}
 
@@ -3763,6 +3964,7 @@ def create_fund_payment(
             f"{user.fullname} reports paying ₹{payload.amount:,.2f} as {payload.kind} "
             f"(reference {pay.reference}). Please confirm once the money is received.",
             req.sangha_id,
+            preference_category="payment_reminders",
         )
 
     try:
@@ -3844,6 +4046,7 @@ def reject_fund_payment(
         f"Your {pay.kind} payment of ₹{pay.amount:,.2f} (reference {pay.reference}) could not be "
         f"confirmed.\n\nReason: {pay.rejection_reason}\n\nPlease check the reference and try again.",
         pay.sangha_id,
+        preference_category="payment_reminders",
     )
     db.commit()
     return {"detail": "Payment rejected."}
@@ -3853,7 +4056,14 @@ def reject_fund_payment(
 # SANGHA CONTRIBUTIONS (every member, every day, debt or not)
 # =====================================================================
 
-CONTRIBUTION_PER_DAY = Decimal("100")   # Sangha rule: change here if the rule changes
+# Sangha rule: every member pays Rs 100 ONCE A WEEK, on any day of that week. Change the amount here.
+CONTRIBUTION_PER_WEEK = Decimal("100")
+WEEKS_SHOWN = 8                          # how many recent weeks My Payments lists
+
+
+def _week_start(d: date) -> date:
+    """The Monday of the week that contains d. A week runs Monday to Sunday."""
+    return d - timedelta(days=d.weekday())
 
 
 def _today_ist() -> date:
@@ -3861,7 +4071,7 @@ def _today_ist() -> date:
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).date()
 
 
-# ---------------- member: this month's calendar ----------------
+# ---------------- member: this week + recent weeks ----------------
 @app.get("/sangha-savings/contributions")
 def get_my_contributions(
     db: Session = Depends(get_db),
@@ -3872,42 +4082,65 @@ def get_my_contributions(
         raise HTTPException(status_code=403, detail="Only members have contributions.")
 
     today = _today_ist()
-    n = calendar.monthrange(today.year, today.month)[1]
-    first, last = today.replace(day=1), today.replace(day=n)
+    this_week = _week_start(today)
+    next_week = this_week + timedelta(days=7)
+
+    # Weeks before the member's first confirmed contribution are not counted as missed
+    first_confirmed = (
+        db.query(func.min(Contribution.for_date))
+        .filter(Contribution.member_id == user.id, Contribution.status == "Confirmed")
+        .scalar()
+    )
+    first_week = _week_start(first_confirmed) if first_confirmed else this_week
+    window_start = max(first_week, this_week - timedelta(weeks=WEEKS_SHOWN - 1))
 
     rows = (
         db.query(Contribution)
         .filter(
             Contribution.member_id == user.id,
             Contribution.status.in_(("Pending", "Confirmed")),
-            Contribution.for_date >= first,
-            Contribution.for_date <= last,
+            Contribution.for_date >= window_start,
+            Contribution.for_date < next_week,
         )
         .all()
     )
-    by_date = {r.for_date: r.status for r in rows}
+    by_week: dict[date, str] = {}
+    for r in rows:
+        wk = _week_start(r.for_date)
+        if r.status == "Confirmed" or wk not in by_week:      # confirmed beats pending
+            by_week[wk] = r.status
 
-    days, due_days = [], 0
-    for i in range(1, n + 1):
-        d = today.replace(day=i)
-        st = by_date.get(d)
+    weeks = []
+    wk = window_start
+    while wk <= this_week:
+        st = by_week.get(wk)
         if st == "Confirmed":
             state = "paid"
         elif st == "Pending":
             state = "waiting"
-        elif d < today:
+        elif wk < this_week:
             state = "missed"
-        elif d == today:
-            state = "due"
         else:
-            state = "upcoming"
-        if state in ("missed", "due"):
-            due_days += 1
-        days.append({"date": d.isoformat(), "day": i, "state": state})
+            state = "due"
+        end = wk + timedelta(days=6)
+        weeks.append({
+            "start": wk.isoformat(), "end": end.isoformat(), "state": state,
+            "label": f"{wk:%d %b} - {end:%d %b %Y}",
+        })
+        wk += timedelta(days=7)
 
-    paid_days = sum(1 for x in days if x["state"] == "paid")
-    paid_amount = sum((_d(r.amount) for r in rows if r.status == "Confirmed"), ZERO)
-
+    this_state = weeks[-1]["state"]
+    month_start = today.replace(day=1)
+    paid_this_month = (
+        db.query(func.coalesce(func.sum(Contribution.amount), 0))
+        .filter(
+            Contribution.member_id == user.id,
+            Contribution.status == "Confirmed",
+            Contribution.for_date >= month_start,
+            Contribution.for_date <= today,
+        )
+        .scalar()
+    )
     year_total = (
         db.query(func.coalesce(func.sum(Contribution.amount), 0))
         .filter(
@@ -3929,16 +4162,16 @@ def get_my_contributions(
     batches: dict = {}
     for r in all_rows:
         b = batches.setdefault(r.batch_id, {
-            "batchId": r.batch_id, "reference": r.reference, "amount": ZERO, "days": [],
+            "batchId": r.batch_id, "reference": r.reference, "amount": ZERO, "weeks": set(),
             "status": r.status, "createdAt": r.created_at.isoformat(),
             "rejectionReason": r.rejection_reason,
         })
         b["amount"] += _d(r.amount)
-        b["days"].append(r.for_date.isoformat())
-    history = []
-    for b in list(batches.values())[:50]:
-        b["days"].sort()
-        history.append({**b, "amount": float(b["amount"])})
+        b["weeks"].add(_week_start(r.for_date).isoformat())
+    history = [
+        {**b, "amount": float(b["amount"]), "weeks": sorted(b["weeks"])}
+        for b in list(batches.values())[:50]
+    ]
 
     account = _account_for(db, user.sangha_id) if user.sangha_id else None
     blocker = None
@@ -3946,18 +4179,68 @@ def get_my_contributions(
         blocker = "You are not currently assigned to a Sangha."
     elif not account or account.status != "Active":
         blocker = "No active Sangha Savings Account is available."
+    elif this_state == "paid":
+        blocker = f"This week's contribution is paid. You can pay again from {next_week:%A, %d %b %Y}."
+    elif this_state == "waiting":
+        blocker = (
+            "This week's contribution is waiting for the admin to confirm. "
+            f"You can pay again from {next_week:%A, %d %b %Y}."
+        )
+
+    # ---- month calendar: only the day the member PAID is coloured, not the whole week ----
+    n_days = calendar.monthrange(today.year, today.month)[1]
+    month_last = today.replace(day=n_days)
+    month_rows = (
+        db.query(Contribution)
+        .filter(
+            Contribution.member_id == user.id,
+            Contribution.status.in_(("Pending", "Confirmed")),
+            Contribution.for_date >= _week_start(month_start),
+            Contribution.for_date <= month_last,
+        )
+        .all()
+    )
+    day_state: dict[date, str] = {}
+    paid_weeks: set[date] = set()
+    for r in month_rows:
+        if r.status == "Confirmed" or r.for_date not in day_state:     # confirmed beats waiting
+            day_state[r.for_date] = "paid" if r.status == "Confirmed" else "waiting"
+        paid_weeks.add(_week_start(r.for_date))
+
+    days = []
+    for i in range(1, n_days + 1):
+        d = today.replace(day=i)
+        wk = _week_start(d)
+        if d in day_state:
+            state = day_state[d]                       # the day the payment was made
+        elif wk in paid_weeks:
+            state = "none"                             # this week is already paid on another day
+        elif wk == this_week:
+            state = "due"                              # any day of this week can be used to pay
+        elif wk < this_week and first_confirmed is not None and wk >= first_week:
+            state = "missed"                           # a week after their first payment with no payment
+        elif wk < this_week:
+            state = "none"                             # before their first payment: not a miss
+        else:
+            state = "upcoming"
+        days.append({"date": d.isoformat(), "day": i, "state": state})
 
     return {
         "month": today.strftime("%B %Y"),
-        "today": today.isoformat(),
-        "daysInMonth": n,
-        "dailyAmount": float(CONTRIBUTION_PER_DAY),
-        "monthlyAmount": float(CONTRIBUTION_PER_DAY * n),
+        "daysInMonth": n_days,
         "days": days,
-        "daysPaid": paid_days,
-        "paidAmount": float(paid_amount),
-        "remaining": float(CONTRIBUTION_PER_DAY * n - paid_amount),
-        "dueNow": float(CONTRIBUTION_PER_DAY * due_days),
+        "today": today.isoformat(),
+        "weekStart": this_week.isoformat(),
+        "weekEnd": (this_week + timedelta(days=6)).isoformat(),
+        "weekLabel": f"{this_week:%d %b} - {(this_week + timedelta(days=6)):%d %b %Y}",
+        "nextPaymentFrom": next_week.isoformat(),
+        "weeklyAmount": float(CONTRIBUTION_PER_WEEK),
+        "thisWeek": this_state,
+        "weeks": weeks,
+        "weeksPaid": sum(1 for w in weeks if w["state"] == "paid"),
+        "weeksTotal": len(weeks),
+        "paidAmount": float(_d(paid_this_month)),
+        "dueNow": float(CONTRIBUTION_PER_WEEK) if this_state == "due" else 0.0,
         "yearTotal": float(_d(year_total)),
         "history": history,
         "canPay": blocker is None,
@@ -3972,6 +4255,8 @@ def create_contribution(
     db: Session = Depends(get_db),
     current_user_id=Depends(get_current_user),
 ):
+    """A member pays ONE contribution per week (Monday to Sunday), on any day of that week.
+    The server decides the week from today's date; the browser cannot choose it."""
     user = _load_user(db, current_user_id)
     if user.role != "member":
         raise HTTPException(status_code=403, detail="Only members can pay contributions.")
@@ -3984,53 +4269,61 @@ def create_contribution(
         raise HTTPException(status_code=400, detail="No active Sangha Savings Account is available.")
 
     today = _today_ist()
-    dates = sorted(set(payload.dates))
-    for d in dates:
-        if d.year != today.year or d.month != today.month:
-            raise HTTPException(status_code=422, detail="You can only pay for days in the current month.")
-        if d > today:
-            raise HTTPException(status_code=422, detail="You cannot pay for a future day.")
+    week_start = _week_start(today)
+    week_end = week_start + timedelta(days=6)
+    next_week = week_start + timedelta(days=7)
+    already = (
+        "You have already paid this week's contribution (or it is waiting for confirmation). "
+        f"You can pay again from {next_week:%A, %d %b %Y}."
+    )
 
+    # Any payment inside this week counts, including older day-by-day payments
     taken = (
         db.query(Contribution.id)
         .filter(
             Contribution.member_id == user.id,
-            Contribution.for_date.in_(dates),
             Contribution.status.in_(("Pending", "Confirmed")),
+            Contribution.for_date >= week_start,
+            Contribution.for_date <= week_end,
         )
         .first()
     )
     if taken:
-        raise HTTPException(status_code=409, detail="Some of these days are already paid or waiting for confirmation.")
+        raise HTTPException(status_code=409, detail=already)
 
-    # The whole contribution (all selected days) must be covered by the bank balance
-    _require_balance(db, user, CONTRIBUTION_PER_DAY * len(dates), "contribution")
+    # The weekly amount must be covered by the bank balance
+    _require_balance(db, user, CONTRIBUTION_PER_WEEK, "weekly contribution")
 
-    now = datetime.utcnow()
     batch_id = str(uuid.uuid4())
-    for d in dates:
-        db.add(Contribution(
-            batch_id=batch_id, member_id=user.id, sangha_id=sangha.id, for_date=d,
-            amount=CONTRIBUTION_PER_DAY, reference=payload.reference.strip(),
-            status="Pending", created_at=now,
-        ))
+    db.add(Contribution(
+        batch_id=batch_id, member_id=user.id, sangha_id=sangha.id,
+        for_date=today,                          # the day the member paid (shown on the calendar)
+        amount=CONTRIBUTION_PER_WEEK, reference=payload.reference.strip(),
+        status="Pending", created_at=datetime.utcnow(),
+    ))
 
-    total = CONTRIBUTION_PER_DAY * len(dates)
     if sangha.admin_id:
         _notify_user(
             db, user.id, sangha.admin_id, "Contribution to confirm",
-            f"{user.fullname} reports paying a Sangha contribution of ₹{total:,.2f} for {len(dates)} day(s) "
-            f"(reference {payload.reference.strip()}). Please confirm once the money is received.",
+            f"{user.fullname} reports paying the weekly Sangha contribution of {CONTRIBUTION_PER_WEEK:,.2f} "
+            f"for the week of {week_start:%d %b %Y}, paid on {today:%d %b %Y} (reference {payload.reference.strip()}). "
+            "Please confirm once the money is received.",
             sangha.id,
+            preference_category="payment_reminders",
         )
 
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError:        # two requests in the same week: the unique index stops the second
         db.rollback()
-        raise HTTPException(status_code=409, detail="Some of these days are already paid or waiting for confirmation.")
+        raise HTTPException(status_code=409, detail=already)
 
-    return {"message": "Contribution submitted. It counts once the admin confirms it.", "batchId": batch_id}
+    return {
+        "message": "Contribution submitted. It counts once the admin confirms it.",
+        "batchId": batch_id,
+        "weekStart": week_start.isoformat(),
+        "paidOn": today.isoformat(),
+    }
 
 
 # ---------------- admin: list, confirm, reject ----------------
@@ -4064,11 +4357,11 @@ def list_pending_contributions(
     for c, s, m in rows:
         b = batches.setdefault(c.batch_id, {
             "batchId": c.batch_id, "memberName": m.fullname, "sanghaName": s.name,
-            "reference": c.reference, "amount": ZERO, "days": [], "createdAt": c.created_at.isoformat(),
+            "reference": c.reference, "amount": ZERO, "weeks": set(), "createdAt": c.created_at.isoformat(),
         })
         b["amount"] += _d(c.amount)
-        b["days"].append(c.for_date.isoformat())
-    return {"items": [{**b, "amount": float(b["amount"])} for b in batches.values()]}
+        b["weeks"].add(_week_start(c.for_date).isoformat())
+    return {"items": [{**b, "amount": float(b["amount"]), "weeks": sorted(b["weeks"])} for b in batches.values()]}
 
 
 def _staff_contribution_batch(db: Session, current_user_id, batch_id: str):
@@ -4117,8 +4410,9 @@ def confirm_contribution(
 
     _notify_user(
         db, user.id, rows[0].member_id, "Contribution confirmed",
-        f"Your Sangha contribution of ₹{total:,.2f} for {len(rows)} day(s) has been received. Thank you.",
+        f"Your Sangha contribution of ₹{total:,.2f} for the week of {_week_start(rows[0].for_date):%d %b %Y} has been received. Thank you.",
         rows[0].sangha_id,
+        preference_category="payment_reminders",
     )
     db.commit()
     return {"detail": "Contribution confirmed.", "amount": float(total)}
@@ -4146,6 +4440,7 @@ def reject_contribution(
         f"Your contribution of ₹{total:,.2f} (reference {rows[0].reference}) could not be confirmed.\n\n"
         f"Reason: {payload.reason.strip()}\n\nPlease check the reference and try again.",
         rows[0].sangha_id,
+        preference_category="payment_reminders",
     )
     db.commit()
     return {"detail": "Contribution rejected."}
@@ -4244,6 +4539,338 @@ def update_employment_profile(
         "professional": user.professional,
         "salary": user.salary,
         "completed": True,
+    }
+
+
+# =====================================================================
+# MEMBER ATTENDANCE  (admin only - and only for the Sanghas that admin manages)
+# =====================================================================
+ATTENDANCE_FINE_PER_HEAD = Decimal("25")      # Sangha rule: 25 rupees for every absentee. Change here.
+ATTENDANCE_ROLES = ("member", "subadmin")     # everyone assigned to the Sangha is marked
+
+
+def _attendance_admin(db: Session, current_user_id, sangha_id: int):
+    """The logged-in user must be an ADMIN and must manage this exact Sangha."""
+    user = _load_user(db, current_user_id)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only a Sangha admin can take attendance.")
+    sangha = db.query(Sanghas).filter(Sanghas.id == sangha_id, Sanghas.admin_id == user.id).first()
+    if not sangha:
+        raise HTTPException(status_code=403, detail="You can only take attendance for the Sanghas you manage.")
+    return user, sangha
+
+
+def _sangha_attendees(db: Session, sangha_id: int) -> list[User]:
+    return (
+        db.query(User)
+        .filter(User.sangha_id == sangha_id, User.role.in_(ATTENDANCE_ROLES))
+        .order_by(User.fullname.asc(), User.id.asc())
+        .all()
+    )
+
+
+def _attendance_totals(records) -> dict:
+    present = sum(1 for r in records if r.present)
+    return {
+        "present": present,
+        "absent": len(records) - present,
+        "fineTotal": float(sum((_d(r.fine_amount) for r in records), ZERO)),
+    }
+
+
+def _attendance_members(db: Session, sangha_id: int, session: AttendanceSession | None) -> list[dict]:
+    """Everyone to mark: the current members, plus anyone already on the saved sheet.
+    present is true / false when marked, None when still to be marked."""
+    saved = {r.member_id: r for r in session.records} if session else {}
+    people = {u.id: u for u in _sangha_attendees(db, sangha_id)}
+    for member_id in saved:
+        if member_id not in people:                      # left the Sangha after the sheet was taken
+            u = db.query(User).filter(User.id == member_id).first()
+            if u:
+                people[member_id] = u
+    rows = []
+    for u in sorted(people.values(), key=lambda x: (x.fullname.lower(), x.id)):
+        rec = saved.get(u.id)
+        rows.append({
+            "id": u.id, "name": u.fullname, "phone": u.phone,
+            "role": u.role.value if hasattr(u.role, "value") else u.role,
+            "present": rec.present if rec else None,
+            "fine": float(_d(rec.fine_amount)) if rec else 0.0,
+        })
+    return rows
+
+
+def _attendance_session_payload(db: Session, session: AttendanceSession, sangha: Sanghas) -> dict:
+    return {
+        "id": session.id,
+        "sanghaId": sangha.id,
+        "sanghaName": sangha.name,
+        "date": session.meeting_date.isoformat(),
+        "finePerHead": float(_d(session.fine_per_head)),
+        "takenAt": session.created_at.isoformat(),
+        "updatedAt": session.updated_at.isoformat() if session.updated_at else None,
+        **_attendance_totals(session.records),
+        "members": _attendance_members(db, sangha.id, session),
+    }
+
+
+def _absent_message(sangha: Sanghas, meeting_date: date, fine: Decimal) -> str:
+    return (
+        f"You are absent in {sangha.name} on {meeting_date:%d %b %Y}. "
+        f"You have to pay a penalty of {('₹' + format(fine, ',.2f')).replace('.00', '')} to the Sangha."
+    )
+
+
+@app.get("/attendance/sanghas")
+def attendance_my_sanghas(
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """Only the Sanghas this admin manages."""
+    user = _load_user(db, current_user_id)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only a Sangha admin can take attendance.")
+    sanghas = (
+        db.query(Sanghas)
+        .filter(Sanghas.admin_id == user.id, Sanghas.isActive.is_(True))
+        .order_by(Sanghas.name.asc())
+        .all()
+    )
+    out = []
+    for s in sanghas:
+        last = (
+            db.query(func.max(AttendanceSession.meeting_date))
+            .filter(AttendanceSession.sangha_id == s.id)
+            .scalar()
+        )
+        out.append({
+            "id": s.id, "name": s.name, "code": s.code, "city": s.city,
+            "membersCount": len(_sangha_attendees(db, s.id)),
+            "lastAttendanceDate": last.isoformat() if last else None,
+        })
+    return out
+
+
+@app.get("/attendance/sanghas/{sangha_id}/members")
+def attendance_members(
+    sangha_id: int,
+    meeting_date: date | None = None,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """The people to mark on a date. If a sheet already exists for that date it comes back too,
+    with each member's saved Yes / No, so the admin can update it."""
+    _, sangha = _attendance_admin(db, current_user_id, sangha_id)
+    day = meeting_date or _today_ist()
+    session = (
+        db.query(AttendanceSession)
+        .filter(AttendanceSession.sangha_id == sangha.id, AttendanceSession.meeting_date == day)
+        .first()
+    )
+    return {
+        "sangha": {"id": sangha.id, "name": sangha.name},
+        "date": day.isoformat(),
+        "finePerHead": float(ATTENDANCE_FINE_PER_HEAD),
+        "session": (
+            {"id": session.id, "takenAt": session.created_at.isoformat(),
+             "updatedAt": session.updated_at.isoformat() if session.updated_at else None}
+            if session else None
+        ),
+        "members": _attendance_members(db, sangha.id, session),
+    }
+
+
+@app.post("/attendance/sanghas/{sangha_id}")
+def attendance_submit(
+    sangha_id: int,
+    payload: AttendanceSubmit,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """Save the sheet for one date: every member Yes / No, Rs 25 fine per absentee, and a message
+    to each absentee. A date can be saved once; later changes go through the update endpoint."""
+    admin, sangha = _attendance_admin(db, current_user_id, sangha_id)
+    today = _today_ist()
+    day = payload.meeting_date
+    if day > today:
+        raise HTTPException(status_code=422, detail="Attendance cannot be taken for a future date.")
+    if day < today - timedelta(days=365):
+        raise HTTPException(status_code=422, detail="That date is too far in the past.")
+
+    existing = (
+        db.query(AttendanceSession.id)
+        .filter(AttendanceSession.sangha_id == sangha.id, AttendanceSession.meeting_date == day)
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Attendance for {day:%d %b %Y} is already saved. Use Update Attendance to change it.",
+        )
+
+    attendees = {u.id: u for u in _sangha_attendees(db, sangha.id)}
+    if not attendees:
+        raise HTTPException(status_code=422, detail="This Sangha has no members to mark.")
+
+    marks: dict[int, bool] = {}
+    for m in payload.records:
+        if m.member_id in marks:
+            raise HTTPException(status_code=422, detail="A member appears more than once.")
+        if m.member_id not in attendees:
+            raise HTTPException(status_code=422, detail="One of the people marked is not a member of this Sangha.")
+        marks[m.member_id] = m.present
+    missing = [attendees[i].fullname for i in attendees if i not in marks]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="Mark Yes or No for every member before submitting. Not marked: " + ", ".join(missing[:5])
+                   + ("..." if len(missing) > 5 else ""),
+        )
+
+    session = AttendanceSession(
+        sangha_id=sangha.id, meeting_date=day, fine_per_head=ATTENDANCE_FINE_PER_HEAD,
+        taken_by=admin.id, created_at=datetime.utcnow(),
+    )
+    db.add(session)
+    db.flush()
+    for member_id, present in marks.items():
+        db.add(AttendanceRecord(
+            session_id=session.id, member_id=member_id, present=present,
+            fine_amount=ZERO if present else ATTENDANCE_FINE_PER_HEAD,
+        ))
+        if not present:
+            _notify_user(
+                db, admin.id, member_id, "You were marked absent",
+                _absent_message(sangha, day, ATTENDANCE_FINE_PER_HEAD), sangha.id,
+                preference_category="attendance_notifications",
+            )
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Attendance for {day:%d %b %Y} is already saved. Use Update Attendance to change it.",
+        )
+    db.refresh(session)
+    return {"message": "Attendance saved.", "session": _attendance_session_payload(db, session, sangha)}
+
+
+@app.get("/attendance/sanghas/{sangha_id}/sessions")
+def attendance_history(
+    sangha_id: int,
+    limit: int = 60,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """The saved attendance sheets of one Sangha, newest first."""
+    _, sangha = _attendance_admin(db, current_user_id, sangha_id)
+    sessions = (
+        db.query(AttendanceSession)
+        .filter(AttendanceSession.sangha_id == sangha.id)
+        .order_by(AttendanceSession.meeting_date.desc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    return [
+        {
+            "id": s.id, "date": s.meeting_date.isoformat(),
+            "takenAt": s.created_at.isoformat(),
+            "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
+            **_attendance_totals(s.records),
+        }
+        for s in sessions
+    ]
+
+
+def _owned_session(db: Session, current_user_id, session_id: int, lock: bool = False):
+    admin = _load_user(db, current_user_id)
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Only a Sangha admin can take attendance.")
+    q = db.query(AttendanceSession).filter(AttendanceSession.id == session_id)
+    if lock:
+        q = q.with_for_update()
+    session = q.first()
+    sangha = (
+        db.query(Sanghas).filter(Sanghas.id == session.sangha_id, Sanghas.admin_id == admin.id).first()
+        if session else None
+    )
+    if not session or not sangha:        # same answer for "does not exist" and "not yours"
+        raise HTTPException(status_code=404, detail="Attendance sheet not found.")
+    return admin, session, sangha
+
+
+@app.get("/attendance/sessions/{session_id}")
+def attendance_detail(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    _, session, sangha = _owned_session(db, current_user_id, session_id)
+    return _attendance_session_payload(db, session, sangha)
+
+
+@app.put("/attendance/sessions/{session_id}")
+def attendance_update(
+    session_id: int,
+    payload: AttendanceUpdate,
+    db: Session = Depends(get_db),
+    current_user_id=Depends(get_current_user),
+):
+    """Change a saved sheet (e.g. someone arrived late). Absent -> present removes the fine;
+    present -> absent adds it. Only members whose status actually changed are notified."""
+    admin, session, sangha = _owned_session(db, current_user_id, session_id, lock=True)
+
+    saved = {r.member_id: r for r in session.records}
+    attendees = {u.id: u for u in _sangha_attendees(db, sangha.id)}
+    fine = _d(session.fine_per_head)
+
+    seen: set[int] = set()
+    changed: list[tuple[int, bool]] = []
+    for m in payload.records:
+        if m.member_id in seen:
+            raise HTTPException(status_code=422, detail="A member appears more than once.")
+        seen.add(m.member_id)
+        rec = saved.get(m.member_id)
+        if rec is None:
+            if m.member_id not in attendees:
+                raise HTTPException(status_code=422, detail="One of the people marked is not a member of this Sangha.")
+            db.add(AttendanceRecord(                      # joined after the sheet was taken
+                session_id=session.id, member_id=m.member_id, present=m.present,
+                fine_amount=ZERO if m.present else fine,
+            ))
+            changed.append((m.member_id, m.present))
+        elif rec.present != m.present:
+            rec.present = m.present
+            rec.fine_amount = ZERO if m.present else fine
+            changed.append((m.member_id, m.present))
+
+    for member_id, present in changed:
+        if present:
+            _notify_user(
+                db, admin.id, member_id, "Attendance updated",
+                f"Your attendance in {sangha.name} on {session.meeting_date:%d %b %Y} was updated to present. "
+                "Your penalty has been removed.",
+                sangha.id,
+                preference_category="attendance_notifications",
+            )
+        else:
+            _notify_user(
+                db, admin.id, member_id, "You were marked absent",
+                _absent_message(sangha, session.meeting_date, fine), sangha.id,
+                preference_category="attendance_notifications",
+            )
+
+    if changed:
+        session.updated_by = admin.id
+        session.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(session)
+    return {
+        "message": "Attendance updated." if changed else "No changes to save.",
+        "changed": len(changed),
+        "session": _attendance_session_payload(db, session, sangha),
     }
 
 

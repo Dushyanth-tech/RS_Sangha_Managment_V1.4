@@ -18,7 +18,7 @@ The score is built from five factors. Each factor is either
   --------------  ------  ----------------------------------------------------------------------
   repayment        40 %   fund_repayments (is_on_time flag) + monthly interest cycles that are past
                           their due date and still unpaid
-  contributions    25 %   confirmed contribution days since the member's first confirmed day
+  contributions    25 %   confirmed weekly contributions since the member's first confirmed week
   stability        15 %   lowest vs average daily balance snapshot (needs snapshots from 2+ days)
   strength         10 %   average snapshot balance vs monthly salary (works from ONE snapshot)
   debt             10 %   principal still owed on active loans vs monthly salary
@@ -70,8 +70,8 @@ SCORE_MAX = 900
 # It is a cap, not a minimum: a member with 1 day of history is scored from that 1 day.
 HISTORY_CAP_DAYS = 365
 
-# A factor about "consistency" needs at least this many observed days to say anything.
-MIN_DAYS_FOR_CONSISTENCY = 2
+# A factor about "consistency" needs at least this much observed history to say anything.
+MIN_WEEKS_FOR_CONSISTENCY = 2    # contributions are paid once a week
 
 MIN_COVERAGE_FOR_SCORE = 0.20   # below this much evidence there is no score at all
 RELIABLE_COVERAGE = 0.75        # reliable weight needed for status "sufficient"
@@ -79,7 +79,7 @@ RELIABLE_COVERAGE = 0.75        # reliable weight needed for status "sufficient"
 # Evidence a factor needs before it counts towards a RELIABLE (categorised) score.
 # These never block the score itself - they only decide "provisional" vs "sufficient".
 RELIABLE_REPAYMENT_EVIDENCE = 3     # recorded repayments + missed due dates
-RELIABLE_CONTRIBUTION_DAYS = 14
+RELIABLE_CONTRIBUTION_WEEKS = 4
 RELIABLE_STABILITY_DAYS = 7
 RELIABLE_STRENGTH_DAYS = 3
 
@@ -129,6 +129,11 @@ def score_category(score: int) -> str:
 # ---------------------------------------------------------------------------------------------
 def _d(value) -> Decimal:
     return Decimal(str(value if value is not None else 0))
+
+
+def _week_start(d: date) -> date:
+    """The Monday of the week that contains d (a week runs Monday to Sunday)."""
+    return d - timedelta(days=d.weekday())
 
 
 def _clamp01(x: float) -> float:
@@ -281,7 +286,7 @@ def calculate_internal_score(db: Session, user: User, interest_rate_percent: Dec
             detail="A loan is active but no payment has been due or recorded yet." + when,
         )
 
-    # ---- 2. contribution consistency ----
+    # ---- 2. contribution consistency (one payment per week, any day of the week) ----
     first_contrib = (
         db.query(func.min(Contribution.for_date))
         .filter(Contribution.member_id == user.id, Contribution.status == "Confirmed")
@@ -289,37 +294,37 @@ def calculate_internal_score(db: Session, user: User, interest_rate_percent: Dec
     )
     if first_contrib is None:
         contributions = _factor("contributions", score=None, detail="No confirmed contribution yet.")
-        eligible_days = 0
     else:
-        first_day = max(first_contrib, cap_start)
-        paid_days = {
-            row[0]
+        first_week = max(_week_start(first_contrib), _week_start(cap_start))
+        this_week = _week_start(today)
+        paid_weeks = {
+            _week_start(row[0])
             for row in db.query(Contribution.for_date)
             .filter(
                 Contribution.member_id == user.id,
                 Contribution.status == "Confirmed",
-                Contribution.for_date >= first_day,
+                Contribution.for_date >= first_week,
                 Contribution.for_date <= today,
             )
             .distinct()
             .all()
         }
-        # today is still in progress: an unpaid today is not a miss yet
-        end_day = today if today in paid_days else today - timedelta(days=1)
-        eligible_days = max((end_day - first_day).days + 1, 0)
-        counted = sum(1 for d in paid_days if d <= end_day)
-        if eligible_days < MIN_DAYS_FOR_CONSISTENCY:
+        # the current week is still in progress: an unpaid current week is not a miss yet
+        end_week = this_week if this_week in paid_weeks else this_week - timedelta(days=7)
+        eligible_weeks = max((end_week - first_week).days // 7 + 1, 0)
+        counted = sum(1 for w in paid_weeks if w <= end_week)
+        if eligible_weeks < MIN_WEEKS_FOR_CONSISTENCY:
             contributions = _factor(
                 "contributions", score=None,
-                detail=f"Only {eligible_days} day(s) observed so far; consistency needs at least "
-                       f"{MIN_DAYS_FOR_CONSISTENCY} days.",
+                detail=f"Only {eligible_weeks} week(s) observed so far; consistency needs at least "
+                       f"{MIN_WEEKS_FOR_CONSISTENCY} weeks.",
             )
         else:
             contributions = _factor(
                 "contributions",
-                score=_clamp01(counted / eligible_days),
-                reliable=eligible_days >= RELIABLE_CONTRIBUTION_DAYS,
-                detail=f"{counted} of {eligible_days} day(s) paid and confirmed since your first contribution.",
+                score=_clamp01(counted / eligible_weeks),
+                reliable=eligible_weeks >= RELIABLE_CONTRIBUTION_WEEKS,
+                detail=f"{counted} of {eligible_weeks} week(s) paid and confirmed since your first contribution.",
             )
 
     # ---- 3 + 4. balance snapshots (never in the future, never a missing one treated as zero) ----

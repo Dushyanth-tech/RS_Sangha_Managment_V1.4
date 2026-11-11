@@ -892,6 +892,7 @@ button.mp-cal__day {
 .mp-cal__day--missed   { background: #fdecec; color: var(--mp-red); border-color: #f3c1c1; }
 .mp-cal__day--due      { background: var(--mp-light); color: var(--mp-royal); border-color: var(--mp-bright); }
 .mp-cal__day--upcoming { background: var(--mp-faint); color: #9fb0cf; }
+.mp-cal__day--none     { background: transparent; color: var(--mp-muted); }
 
 .mp-cal__day--sel {
   background: var(--mp-navy);
@@ -904,6 +905,34 @@ button.mp-cal__day:focus-visible {
   outline: 2px solid var(--mp-bright);
   outline-offset: 2px;
 }
+
+.mp-weeks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.mp-week {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.mp-week__label { font-weight: 600; }
+.mp-week__state { font-size: 13px; font-weight: 600; }
+
+.mp-week--paid    { background: var(--mp-royal); color: #fff; }
+.mp-week--waiting { background: #fff4de; color: #8a5a00; border-color: #f3d9a8; }
+.mp-week--missed  { background: #fdecec; color: var(--mp-red); border-color: #f3c1c1; }
+.mp-week--due     { background: var(--mp-light); color: var(--mp-royal); border-color: var(--mp-bright); }
 
 .mp-legend {
   display: flex;

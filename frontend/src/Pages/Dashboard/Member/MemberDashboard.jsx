@@ -49,7 +49,13 @@ export default function MemberDashboard() {
     useState(false);
 
   const menuRef = useRef(null);
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const [user, setUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") || "{}");
+    } catch {
+      return {};
+    }
+  });
 
   // ================= NOTIFICATIONS =================
   // Lifted here (rather than living inside Notifications.jsx) because the
@@ -181,7 +187,13 @@ export default function MemberDashboard() {
     payments: () => <MyPayments />,
     savings: () => <SanghaSavings />,
     loans: () => <Loans />,
-    settings: () => <SettingsPage />,
+    settings: () => (
+      <SettingsPage
+        user={user}
+        onProfileUpdated={setUser}
+        onLogout={handleLogout}
+      />
+    ),
     help: () => <HelpSupport />,
     sangha: () => <MySangha />,
     notifications: () => (
@@ -214,13 +226,14 @@ export default function MemberDashboard() {
           </div>
         </div>
 
-        <nav className="md-navigation">
+        <nav className="md-navigation" aria-label="Member navigation">
           {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               type="button"
               className={`md-navigation__item ${page === key ? "md-navigation__item--active" : ""}`}
               onClick={() => handleNavigation(key)}
+              aria-current={page === key ? "page" : undefined}
             >
               {key === "notifications" ? (
                 <span className="md-navigation__notification-icon">

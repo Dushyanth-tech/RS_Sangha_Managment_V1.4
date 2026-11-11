@@ -1,0 +1,257 @@
+/* Member Attendance (admin). Uses the dashboard theme tokens from SuperAdminDashboard.css */
+
+.att-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--white);
+  box-shadow: var(--shadow-card);
+}
+
+.att-card__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--pink-900);
+}
+
+.att-card__hint,
+.att-muted {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.att-pick {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.att-pick label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.att-pick select,
+.att-pick input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+}
+
+.att-pick select:focus,
+.att-pick input:focus {
+  outline: 2px solid var(--pink-500);
+  outline-offset: 1px;
+}
+
+.att-sheet__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.att-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--blush-100);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.att-summary__fine {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--pink-900);
+}
+
+.att-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.att-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line-light);
+  background: var(--white);
+}
+
+.att-row:first-child {
+  border-top: 0;
+}
+
+.att-row--head {
+  background: var(--blush-50);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.att-row--absent {
+  background: #fdf1f2;
+}
+
+.att-row__who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.att-row__who b {
+  font-size: 14.5px;
+  color: var(--ink);
+}
+
+.att-row__who small {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.att-row__choices {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.att-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 74px;
+  justify-content: center;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.att-choice input {
+  accent-color: var(--pink-700);
+  margin: 0;
+}
+
+.att-choice--yes.is-on {
+  border-color: var(--success);
+  background: #e8f5ee;
+  color: var(--success);
+}
+
+.att-choice--no.is-on {
+  border-color: var(--error);
+  background: #fdecee;
+  color: var(--error);
+}
+
+.att-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.att-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--gold-300);
+  border-radius: var(--radius-md);
+  background: var(--gold-050);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.att-confirm p {
+  margin: 0;
+}
+
+.att-toast,
+.att-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+}
+
+.att-toast {
+  border: 1px solid #b9dfc9;
+  background: #e8f5ee;
+  color: var(--success);
+}
+
+.att-alert {
+  border: 1px solid #f0c2c7;
+  background: #fdecee;
+  color: var(--error);
+}
+
+.att-table td,
+.att-table th {
+  white-space: nowrap;
+}
+
+.att-spin {
+  animation: att-spin 0.9s linear infinite;
+}
+
+@keyframes att-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .att-pick {
+    grid-template-columns: 1fr;
+  }
+
+  .att-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .att-sheet__head {
+    flex-direction: column;
+  }
+
+  .att-summary__fine {
+    margin-left: 0;
+  }
+}

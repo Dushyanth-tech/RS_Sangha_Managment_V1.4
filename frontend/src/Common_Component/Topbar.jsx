@@ -1,5 +1,5 @@
 import React from "react";
-import { Search, Bell, LogOut } from "lucide-react";
+import { Search, Bell, LogOut, Menu, X } from "lucide-react";
 import "./Topbar.css";
 
 // Same localStorage structure as before, with a safe fallback for missing/invalid data
@@ -15,6 +15,8 @@ export default function Topbar({
   onLogout,
   notificationCount = 0,
   onNotificationsClick,
+  onMenuClick,
+  menuOpen = false,
 }) {
   const user = readUser();
   const fullname = user.fullname || "";
@@ -22,6 +24,17 @@ export default function Topbar({
 
   return (
     <header className="tb">
+      {onMenuClick && (
+        <button
+          type="button"
+          className="tb__menu"
+          onClick={onMenuClick}
+          aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+          aria-expanded={menuOpen}
+        >
+          {menuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+      )}
       <div className="tb__search">
         <Search className="tb__search-icon" size={18} aria-hidden="true" />
         <input

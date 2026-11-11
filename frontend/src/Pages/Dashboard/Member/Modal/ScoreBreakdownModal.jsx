@@ -1,6 +1,7 @@
 import React from "react";
 import { X } from "lucide-react";
 import "../pages/MySangha.css";
+import { formatAppDate } from "../settingsPreferences";
 import "./ScoreBreakdownModal.css";
 
 const STATUS_TEXT = {
@@ -12,9 +13,7 @@ const STATUS_TEXT = {
 const formatDate = (value) => {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  return Number.isNaN(date.getTime()) ? "" : formatAppDate(date);
 };
 
 const rupees = (value) => `₹${Number(value || 0).toLocaleString("en-IN")}`;

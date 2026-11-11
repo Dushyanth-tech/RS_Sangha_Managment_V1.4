@@ -263,6 +263,7 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sangha_ids: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of sangha ids; null/empty = All Sanghas
+    preference_category: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
 class NotificationRecipient(Base):
@@ -276,6 +277,25 @@ class NotificationRecipient(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (UniqueConstraint("notification_id", "user_id", name="uq_notification_recipient"),)
+
+
+class UserNotificationPreferences(Base):
+    __tablename__ = "user_notification_preferences"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    in_app_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    payment_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    attendance_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    emergency_request_updates: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    loan_repayment_reminders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    account_verification_updates: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    important_announcements: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    user: Mapped["User"] = relationship()
+
 
 class SanghaSavingsAccount(Base):
     __tablename__ = "sangha_savings_accounts"
@@ -550,4 +570,44 @@ class Contribution(Base):
             "uq_contribution_day", "member_id", "for_date", unique=True,
             postgresql_where=text("status IN ('Pending','Confirmed')"),
         ),
+    )
+
+
+class AttendanceSession(Base):
+    """One attendance sheet: a Sangha's meeting on one date, taken by the Sangha's admin."""
+    __tablename__ = "attendance_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sangha_id: Mapped[int] = mapped_column(ForeignKey("sanghas.id"), index=True)
+    meeting_date: Mapped[date] = mapped_column(Date)
+    fine_per_head: Mapped[Decimal] = mapped_column(Numeric(8, 2))      # fixed when the sheet is created
+    taken_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    records: Mapped[list["AttendanceRecord"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sangha_id", "meeting_date", name="uq_attendance_sangha_date"),
+    )
+
+
+class AttendanceRecord(Base):
+    """One member's attendance on one sheet. Absent members carry the fine."""
+    __tablename__ = "attendance_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("attendance_sessions.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    present: Mapped[bool] = mapped_column(Boolean)
+    fine_amount: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0)   # 0 when present
+
+    session: Mapped["AttendanceSession"] = relationship(back_populates="records")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "member_id", name="uq_attendance_session_member"),
+        CheckConstraint("fine_amount >= 0", name="ck_attendance_fine_non_negative"),
     )
