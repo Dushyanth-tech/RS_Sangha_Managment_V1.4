@@ -615,6 +615,42 @@ input {
   transform: translateY(-1px);
 }
 
+.auth__google:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.auth__google-wrap {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+  min-height: 41px;
+}
+
+.auth__google-button {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 40px;
+}
+
+.auth__google-button.is-disabled {
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.auth__google-error,
+.auth__google-status {
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+.auth__google-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 
 /* =========================================================
    FOOTER

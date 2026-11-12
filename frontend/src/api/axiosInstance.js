@@ -20,7 +20,9 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem("access_token");
       localStorage.removeItem("user");
-      window.location.href = "/auth";
+      if (window.location.pathname !== "/auth") {
+        window.location.href = "/auth";
+      }
     }
     return Promise.reject(error);
   }

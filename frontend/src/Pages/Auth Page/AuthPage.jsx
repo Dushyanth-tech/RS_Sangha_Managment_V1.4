@@ -1,12 +1,9 @@
-import React, { useState } from "react";
-import axios from "axios";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../../api/axiosInstance";
+import GoogleSignInButton from "./GoogleSignInButton";
 import "./AuthPage.css";
 import decorImage from "../../assets/buddha-sunset.png";
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-
 /* ---------- tiny inline icons (no external icon lib needed) ---------- */
 const EyeIcon = ({ open }) =>
   open ? (
@@ -34,27 +31,6 @@ const EyeIcon = ({ open }) =>
       <path d="M1 1l22 22" />
     </svg>
   );
-
-const GoogleIcon = () => (
-  <svg viewBox="0 0 48 48" width="18" height="18">
-    <path
-      fill="#FFC107"
-      d="M43.6 20.5H42V20H24v8h11.3C33.7 32.6 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5Z"
-    />
-    <path
-      fill="#FF3D00"
-      d="M6.3 14.7l6.6 4.8C14.6 15.6 18.9 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6 29.6 4 24 4 16.3 4 9.6 8.3 6.3 14.7Z"
-    />
-    <path
-      fill="#4CAF50"
-      d="M24 44c5.5 0 10.5-1.9 14.3-5.1l-6.6-5.6C29.6 35.2 26.9 36 24 36c-5.3 0-9.7-3.4-11.3-8.1l-6.6 5.1C9.5 39.6 16.2 44 24 44Z"
-    />
-    <path
-      fill="#1976D2"
-      d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.7l6.6 5.6C41.4 36.6 44 30.9 44 24c0-1.3-.1-2.7-.4-3.5Z"
-    />
-  </svg>
-);
 
 /* ---------- reusable field — label above input ---------- */
 function Field({
@@ -119,6 +95,52 @@ export default function AuthPage() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [signupError, setSignupError] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const navigateToRoleDashboard = useCallback((user, onboardingRequired = false) => {
+    const rolePath = {
+      superadmin: "superadmin",
+      admin: "admin",
+      member: "member",
+      subadmin: "member",
+    }[user?.role];
+
+    if (!rolePath) {
+      throw new Error("Your account does not have a supported dashboard role.");
+    }
+
+    navigate(`/dashboard/${rolePath}`, {
+      replace: true,
+      state: onboardingRequired && rolePath === "member"
+        ? { completeProfile: true }
+        : undefined,
+    });
+  }, [navigate]);
+
+  const handleGoogleCredential = useCallback(async (credential) => {
+    setLoginError("");
+    setSignupError("");
+    setGoogleLoading(true);
+    try {
+      const response = await api.post("/auth/google", { credential });
+      const { access_token: accessToken, user } = response.data;
+      if (!accessToken || !user?.role) {
+        throw new Error("The server returned an incomplete sign-in response.");
+      }
+      localStorage.setItem("access_token", accessToken);
+      localStorage.setItem("user", JSON.stringify(user));
+      navigateToRoleDashboard(user, user.onboarding_required);
+    } catch (error) {
+      const message =
+        error.response?.data?.detail ||
+        error.message ||
+        "Google sign-in failed. Please try again.";
+      if (mode === "signup") setSignupError(message);
+      else setLoginError(message);
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [mode, navigateToRoleDashboard]);
 
   const handleLoginChange = (e) =>
     setLogin((s) => ({ ...s, [e.target.name]: e.target.value }));
@@ -131,24 +153,15 @@ export default function AuthPage() {
     setLoginError("");
     setLoginLoading(true);
     try {
-      const res = await axios.post(`${API_BASE_URL}/auth/login`, {
+      const res = await api.post("/auth/login", {
         email: login.email,
         password: login.password,
       });
-      console.log("login success", res.data);
       const { access_token, user } = res.data;
 
-      console.log("User type:", typeof user);
       localStorage.setItem("access_token", access_token);
       localStorage.setItem("user", JSON.stringify(user));
-  
-      if (user.role === "superadmin") {
-        navigate("/superadmin/dashboard");
-      } else if (user.role === "admin") {
-        navigate("/admin/dashboard");
-      }else if (user.role === "member") {
-        navigate("/member/dashboard");
-      }
+      navigateToRoleDashboard(user);
     } catch (err) {
       setLoginError(
         err.response?.data?.detail || "Login failed. Please try again.",
@@ -173,7 +186,7 @@ export default function AuthPage() {
     setSignupError("");
     setSignupLoading(true);
     try {
-      const res = await axios.post(`${API_BASE_URL}/auth/register`, {
+      await api.post("/auth/register", {
         username: signup.username,
         fullname: signup.fullName,
         email: signup.email,
@@ -181,7 +194,6 @@ export default function AuthPage() {
         password: signup.password,
         confirm_password: signup.confirmPassword,
       });
-      console.log("signup success", res.data);
       setMode("login");
     } catch (err) {
       setSignupError(
@@ -270,7 +282,7 @@ export default function AuthPage() {
               <button
                 type="submit"
                 className="auth__submit"
-                disabled={loginLoading}
+                disabled={loginLoading || googleLoading}
               >
                 {loginLoading ? "Logging in..." : "Log In"}
               </button>
@@ -279,10 +291,12 @@ export default function AuthPage() {
                 <span>or</span>
               </div>
 
-              <button type="button" className="auth__google">
-                <GoogleIcon />
-                Continue with Google
-              </button>
+              <GoogleSignInButton
+                mode="login"
+                onCredential={handleGoogleCredential}
+                disabled={googleLoading}
+              />
+              {googleLoading && <p className="auth__google-status" role="status">Signing in with Google…</p>}
 
               <p className="auth__foot">
                 Don&apos;t have an account?{" "}
@@ -351,10 +365,21 @@ export default function AuthPage() {
               <button
                 type="submit"
                 className="auth__submit"
-                disabled={signupLoading}
+                disabled={signupLoading || googleLoading}
               >
                 {signupLoading ? "Creating account..." : "Create Account"}
               </button>
+
+              <div className="auth__divider">
+                <span>or</span>
+              </div>
+
+              <GoogleSignInButton
+                mode="signup"
+                onCredential={handleGoogleCredential}
+                disabled={googleLoading}
+              />
+              {googleLoading && <p className="auth__google-status" role="status">Creating your account…</p>}
 
               <p className="auth__foot">
                 Already have an account?{" "}

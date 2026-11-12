@@ -116,6 +116,8 @@ export default function ProfileWizard({ onBack }) {
           } catch {
             // no photo yet, or fetch failed — leave initials showing
           }
+        } else if (profile?.google_picture_url) {
+          setPhotoUrl(profile.google_picture_url);
         }
 
         if (profile?.has_pan_image) {

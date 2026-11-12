@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.credit_score import calculate_internal_score
 from app.emergency_eligibility import evaluate_emergency_eligibility
 from app.authSchema import CreditScoreResponse, AttendanceSubmit, AttendanceUpdate
-from app.authSchema import NewUser, LoginUser, NewSanghas, Search, AdminRequestCreate,AddAdminRequest,RemoveSanghasPayload,SanghaUpdate, ProfileWizardUpdate, NotificationCreate, ClearNotificationsRequest, SanghaSavingsAccountCreate, CibilUpdate, FundRequestCreate, FundRequestReview, FundRepaymentCreate, FundPaymentCreate, FundPaymentConfirm, FundPaymentReject, ContributionCreate, SettingsProfileUpdate, ChangePasswordRequest, NotificationPreferencesUpdate
+from app.authSchema import NewUser, LoginUser, GoogleAuthRequest, NewSanghas, Search, AdminRequestCreate,AddAdminRequest,RemoveSanghasPayload,SanghaUpdate, ProfileWizardUpdate, NotificationCreate, ClearNotificationsRequest, SanghaSavingsAccountCreate, CibilUpdate, FundRequestCreate, FundRequestReview, FundRepaymentCreate, FundPaymentCreate, FundPaymentConfirm, FundPaymentReject, ContributionCreate, SettingsProfileUpdate, ChangePasswordRequest, NotificationPreferencesUpdate
 from app.authSchema import (
     MemberBankBalanceSnapshotCreateResponse,
     MemberBankBalanceSnapshotResponse,
@@ -20,7 +20,7 @@ from app.bank_balance import (
 )
 from decimal import Decimal
 from app.authModal import (
-    User, Sanghas, SubAdminRequest, RequestStatus, BankDetails, Notification,
+    User, Role, Sanghas, SubAdminRequest, RequestStatus, BankDetails, Notification,
     NotificationRecipient, SanghaSavingsAccount, Loan, LoanRepayment,
     LoanStatus, VerificationRequest,    FundRequest, FundRepayment, FundTransaction, FundRequestStatus,
     NotificationType, RecipientRule, NotificationStatus, FundPayment, Contribution,
@@ -30,6 +30,7 @@ from app.authModal import (
 )
 from app.dbconnection import get_db, engine, Base
 from app.auth import create_access_token, hash_password, verify_password, get_current_user
+from app.google_auth import verify_google_credential
 from sqlalchemy import or_,func, select
 from sqlalchemy.orm import aliased, Session, joinedload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -39,11 +40,15 @@ import re
 import json
 import os, uuid
 import calendar
+import hashlib
+import secrets
 
 app = FastAPI()
 
 origins = [
-    "http://localhost:5173",
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    if origin.strip()
 ]
 
 app.add_middleware(
@@ -227,6 +232,94 @@ def login_user(
             "email": db_user.email,
             "role": db_user.role
         }
+    }
+
+@app.post("/auth/google")
+def login_with_google(
+    payload: GoogleAuthRequest,
+    db: Session = Depends(get_db),
+):
+    claims = verify_google_credential(payload.credential)
+    user = db.query(User).filter(User.google_id == claims["google_id"]).first()
+    is_new_user = False
+
+    if user is None:
+        user = (
+            db.query(User)
+            .filter(func.lower(User.email) == claims["email"])
+            .first()
+        )
+        if user is not None:
+            if user.google_id and user.google_id != claims["google_id"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This account is already linked to a different Google account.",
+                )
+            user.google_id = claims["google_id"]
+            user.google_email_verified = True
+            user.google_picture_url = claims["picture_url"]
+        else:
+            user = User(
+                fullname=claims["fullname"],
+                username=f"g{hashlib.sha256(claims['google_id'].encode()).hexdigest()[:29]}",
+                email=claims["email"],
+                phone=None,
+                password=hash_password(secrets.token_urlsafe(48)),
+                role=Role.member,
+                isVerified=False,
+                isActive=True,
+                google_id=claims["google_id"],
+                google_picture_url=claims["picture_url"],
+                google_email_verified=True,
+                sangha_id=None,
+            )
+            db.add(user)
+            is_new_user = True
+
+    if not is_new_user:
+        user.google_email_verified = True
+        if claims["picture_url"]:
+            user.google_picture_url = claims["picture_url"]
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError as exc:
+        db.rollback()
+        user = db.query(User).filter(User.google_id == claims["google_id"]).first()
+        if user is None:
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email or Google account already exists.",
+            ) from exc
+        is_new_user = False
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to sign in with Google.") from exc
+
+    role = getattr(user.role, "value", user.role)
+    token = create_access_token({
+        "sub": str(user.id),
+        "email": user.email,
+        "role": role,
+    })
+    bank = db.query(BankDetails).filter(BankDetails.user_id == user.id).first()
+    onboarding_required = role == "member" and (
+        not _is_profile_complete(user) or not _is_banking_added(bank)
+    )
+
+    return {
+        "message": "Login successful",
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "fullname": user.fullname,
+            "email": user.email,
+            "role": role,
+            "google_picture_url": user.google_picture_url,
+            "onboarding_required": onboarding_required,
+        },
     }
 
 @app.post("/sanghas")
@@ -1438,6 +1531,7 @@ def get_profile_wizard(db: Session = Depends(get_db), current_user_id=Depends(ge
             "date_of_birth": user.date_of_birth,
             "email": user.email,
             "phone": user.phone,
+            "google_picture_url": user.google_picture_url,
             "address": user.address,
             "id_proof_type": user.id_proof_type,
             "id_proof_number_masked": mask_last4(decrypt_value(user.id_proof_number_enc)) if user.id_proof_number_enc else None,

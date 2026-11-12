@@ -388,7 +388,13 @@ export default function SettingsPage({ onLogout, onProfileUpdated, user }) {
             {profileError && <p className="settings-inline-error" role="alert">{profileError}</p>}
             <div className="settings-profile">
               <div className="settings-avatar" aria-label={`${displayName} profile photo`}>
-                {photo ? <img src={photo} alt="" /> : displayName.slice(0, 1).toUpperCase()}
+                {photo || profile?.profile?.google_picture_url || storedUser.google_picture_url ? (
+                  <img
+                    src={photo || profile?.profile?.google_picture_url || storedUser.google_picture_url}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                  />
+                ) : displayName.slice(0, 1).toUpperCase()}
               </div>
               <div>
                 <strong>{displayName}</strong>

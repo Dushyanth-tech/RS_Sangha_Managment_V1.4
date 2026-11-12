@@ -45,6 +45,10 @@ class LoginUser(BaseModel):
     password: str
 
 
+class GoogleAuthRequest(BaseModel):
+    credential: str = Field(..., min_length=1, max_length=8192)
+
+
 class SettingsProfileUpdate(BaseModel):
     fullname: str = Field(..., min_length=1, max_length=50)
 

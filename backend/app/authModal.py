@@ -46,10 +46,15 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fullname: Mapped[str] = mapped_column(String(50))
     username: Mapped[str] = mapped_column(String(30), unique=True)
-    email: Mapped[str] = mapped_column(String(50), unique=True)
-    phone: Mapped[str] = mapped_column(String(15), unique=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    phone: Mapped[str | None] = mapped_column(String(15), unique=True, nullable=True)
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password: Mapped[str] = mapped_column(String(255))
+    google_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True, index=True
+    )
+    google_picture_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    google_email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.member)
     isVerified: Mapped[bool] = mapped_column(Boolean, default=False)

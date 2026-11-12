@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import api from "../../../api/axiosInstance"; // ⚠️ verify this matches this file's actual depth
 import {
   House,
@@ -40,8 +41,12 @@ const NAV_ITEMS = [
 ];
 
 export default function MemberDashboard() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [page, setPage] = useState("home");
+  const [page, setPage] = useState(() =>
+    location.state?.completeProfile ? "profile" : "home",
+  );
   const [sanghasName, setSanghasName] = useState("");
   const [showAccountStatus, setShowAccountStatus] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -56,6 +61,12 @@ export default function MemberDashboard() {
       return {};
     }
   });
+
+  useEffect(() => {
+    if (location.state?.completeProfile) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.pathname, location.state?.completeProfile, navigate]);
 
   // ================= NOTIFICATIONS =================
   // Lifted here (rather than living inside Notifications.jsx) because the
